@@ -101,34 +101,51 @@ function startWatcher(folderPath) {
     watcher = chokidar.watch(folderPath, {
         ignoreInitial: true,
         awaitWriteFinish: {
-            stabilityThreshold: 1000,
-            pollInterval: 100
+            stabilityThreshold: 2000,
+            pollInterval: 200
         },
         ignorePermissionErrors: true // Prevents crashes on restricted system folders
     }).on('add', (filePath) => {
         const fileName = path.basename(filePath);
+        
+        // Ignore non-image files (like temporary files created by camera software)
+        if (!/\.(jpe?g|png)$/i.test(fileName)) {
+            return;
+        }
+        
         console.log(`📸 New photo detected: ${fileName}`);
 
         // Copy the file to the internal 'camera_folder' to be served statically
         const destinationPath = path.join(cameraFolder, fileName);
-        fs.copyFile(filePath, destinationPath, (err) => {
-            if (err) {
-                console.error(`Error copying file: ${err}`);
-                return;
-            }
-            console.log(`Copied ${fileName} to internal camera folder for serving.`);
         
-        latestPhoto = {
-            name: fileName,
-            path: fileName
+        // Function to retry copying if the file is locked by the camera software
+        const copyWithRetry = (src, dest, retries = 5, delay = 500) => {
+            fs.copyFile(src, dest, (err) => {
+                if (err) {
+                    if (retries > 0) {
+                        console.log(`⏳ File might be locked, retrying in ${delay}ms... (${retries} attempts left)`);
+                        setTimeout(() => copyWithRetry(src, dest, retries - 1, delay), delay);
+                    } else {
+                        console.error(`❌ Error copying file after retries: ${err}`);
+                    }
+                    return;
+                }
+                console.log(`✅ Copied ${fileName} to internal camera folder for serving.`);
+            
+                latestPhoto = {
+                    name: fileName,
+                    path: fileName
+                };
+
+                // Emit the event with the URL that points to the internal folder
+                io.emit('NEW_PHOTO', {
+                    url: `http://localhost:${PORT}/photos/${fileName}`,
+                    name: fileName
+                });
+            });
         };
 
-            // Emit the event with the URL that points to the internal folder
-            io.emit('NEW_PHOTO', {
-                url: `http://localhost:${PORT}/photos/${fileName}`,
-                name: fileName
-            });
-        });
+        copyWithRetry(filePath, destinationPath);
     }).on('error', (error) => {
         console.error(`Watcher error (ignoring): ${error.message}`);
     });
