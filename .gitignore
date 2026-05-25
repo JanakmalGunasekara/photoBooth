@@ -1,0 +1,29 @@
+# Node modules (Root, Frontend, and Backend)
+node_modules/
+frontend/node_modules/
+backend/node_modules/
+
+# Electron Production builds & Unpacked folders (Crucial Fix)
+dist-electron/
+release/
+frontend/dist/
+
+# Executable files (Blocks any hidden .exe files)
+*.exe
+*.dll
+*.asar
+
+# Local Wedding Photos, Templates & Outputs
+backend/camera_folder/
+backend/outputs/
+backend/templates/
+
+# Environment Variables & Configs (Don't leak your Supabase Keys)
+.env
+.env.local
+config.json
+backend/config.json
+
+# OS generated files
+.DS_Store
+Thumbs.db

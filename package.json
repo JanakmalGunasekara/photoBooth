@@ -1,0 +1,47 @@
+{
+  "name": "oculaa-photo-booth-electron",
+  "version": "1.0.0",
+  "description": "An Electron-based photo booth application",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "dev": "vite frontend",
+    "build": "vite build frontend && electron-builder",
+    "preview": "vite preview frontend"
+  },
+  "keywords": [],
+  "author": "Your Name",
+  "license": "ISC",
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "electron": "^29.0.0",
+    "electron-builder": "^24.13.3",
+    "vite": "^5.2.11"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.106.2",
+    "chokidar": "^3.5.3",
+    "sharp": "^0.33.3"
+  },
+  "build": {
+    "appId": "com.oculaa.photobooth",
+    "productName": "Oculaa Photo Booth",
+    "compression": "maximum",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      "main.cjs",
+      "preload.cjs",
+      "!main.js",
+      "frontend/dist/**/*"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "uninstallDisplayName": "Oculaa Photo Booth Uninstaller",
+      "allowElevation": true
+    }
+  }
+}
