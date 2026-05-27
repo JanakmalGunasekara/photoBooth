@@ -6,6 +6,7 @@ const BACKEND_URL = 'http://localhost:5000'; // Define your backend URL
 function App() {
   // Global state
   const [mode, setMode] = useState('live'); // 'live' or 'setup'
+  const [isDarkMode, setIsDarkMode] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
   const [showInstructions, setShowInstructions] = useState(false);
 
@@ -42,6 +43,11 @@ function App() {
   const lastPhotoNameRef = useRef(null);
   const lastUpdateRef = useRef(null); // Ref to track overall session updates
   const dragRef = useRef({ isDragging: false, index: -1, startX: 0, startY: 0, startPos: {x:50, y:50} });
+
+  // --- Theme Effect ---
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', isDarkMode ? 'dark' : 'light');
+  }, [isDarkMode]);
 
   // --- Main Effect Hook ---
   useEffect(() => {
@@ -630,19 +636,22 @@ function App() {
         .photo-thumbnail .badge { position: absolute; top: 6px; right: 6px; background: #28a745; color: white; border-radius: 50%; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 12px; box-shadow: 0 2px 5px rgba(0,0,0,0.4); }
         .selection-box { position: absolute; border: 2px dashed #ff0000; background: rgba(255, 0, 0, 0.2); pointer-events: none; }
         .selection-box .box-index { position: absolute; top: 0; left: 0; background: red; color: white; padding: 2px 6px; font-size: 14px; font-weight: bold; }
-        .highlighted-photo-container { margin-top: 15px; background: #181818; border: 1px solid rgba(255,255,255,0.05); box-shadow: inset 0 2px 10px rgba(0,0,0,0.5); border-radius: 12px; padding: 20px; display: flex; justify-content: center; align-items: center; min-height: 420px; }
+        .highlighted-photo-container { margin-top: 15px; background: var(--item-bg); border: 1px solid var(--border-color); box-shadow: inset 0 2px 10px rgba(0,0,0,0.1); border-radius: 12px; padding: 20px; display: flex; justify-content: center; align-items: center; min-height: 420px; }
         .highlighted-photo-wrapper { position: relative; display: flex; flex-direction: column; align-items: center; gap: 15px; width: 100%; }
         .highlighted-img { max-height: 50vh; max-width: 100%; border-radius: 8px; object-fit: contain; box-shadow: 0 5px 15px rgba(0,0,0,0.5); }
         .large-badge { position: absolute; top: -10px; right: -10px; background: #28a745; color: white; border-radius: 50%; width: 45px; height: 45px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 22px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); z-index: 2; }
         .highlighted-actions { display: flex; gap: 10px; }
-        .photo-instructions { margin-top: 10px; font-weight: 500; color: #aaa; background: rgba(255,255,255,0.05); padding: 10px; border-radius: 8px; }
+        .photo-instructions { margin-top: 10px; font-weight: 500; color: var(--text-muted); background: var(--input-bg); padding: 10px; border-radius: 8px; }
         .delete-photo-btn { position: absolute; top: 6px; left: 6px; background: rgba(220, 53, 69, 0.9); color: white; border: none; border-radius: 50%; width: 24px; height: 24px; font-size: 16px; font-weight: bold; cursor: pointer; display: flex; align-items: center; justify-content: center; z-index: 5; padding: 0; line-height: 1; transition: all 0.2s; box-shadow: 0 2px 4px rgba(0,0,0,0.3); }
         .delete-photo-btn:hover { background: #dc3545; transform: scale(1.15) rotate(90deg); }
-        .back-arrow-btn { position: absolute; top: 20px; left: 20px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); width: 45px; height: 45px; border-radius: 50%; display: flex; justify-content: center; align-items: center; font-size: 1.5rem; color: #ff9a9e; cursor: pointer; padding: 0; transition: all 0.3s; z-index: 100; box-shadow: 0 4px 6px rgba(0,0,0,0.2); }
+        .back-arrow-btn { position: absolute; top: 20px; left: 20px; background: var(--input-bg); border: 1px solid var(--border-color); width: 45px; height: 45px; border-radius: 50%; display: flex; justify-content: center; align-items: center; font-size: 1.5rem; color: var(--accent-pink); cursor: pointer; padding: 0; transition: all 0.3s; z-index: 100; box-shadow: 0 4px 6px rgba(0,0,0,0.2); }
         .back-arrow-btn:hover { background: var(--accent-pink); color: #121212; transform: translateX(-5px); box-shadow: 0 6px 12px rgba(255, 154, 158, 0.3); }
       `}</style>
       <header className="header">
         <h1>Photo Booth Dashboard</h1>
+        <div className="theme-toggle" onClick={() => setIsDarkMode(!isDarkMode)} title={isDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}>
+          {isDarkMode ? '☀️' : '🌙'}
+        </div>
         <div className="help-icon" onClick={() => setShowInstructions(true)} title="Show Instructions">
           ?
         </div>
@@ -727,7 +736,7 @@ function App() {
                   value={printCopies}
                   onChange={(e) => setPrintCopies(Math.max(1, parseInt(e.target.value, 10) || 1))}
                   disabled={isProcessing}
-                  style={{ width: '70px', padding: '0.4em', borderRadius: '4px', border: '1px solid #666', backgroundColor: '#444', color: 'white', textAlign: 'center', fontSize: '1.1em' }}
+                  style={{ width: '70px', padding: '0.4em', borderRadius: '4px', border: '1px solid var(--border-color)', backgroundColor: 'var(--input-bg)', color: 'var(--text-main)', textAlign: 'center', fontSize: '1.1em' }}
                 />
               </div>
               <div className="control-group" style={{ flexDirection: 'row', gap: '10px' }}>
@@ -739,7 +748,7 @@ function App() {
                   value={emailAddress}
                   onChange={(e) => setEmailAddress(e.target.value)}
                   disabled={isProcessing}
-                  style={{ width: '200px', padding: '0.4em', borderRadius: '4px', border: '1px solid #666', backgroundColor: '#444', color: 'white', fontSize: '1.1em' }}
+                  style={{ width: '200px', padding: '0.4em', borderRadius: '4px', border: '1px solid var(--border-color)', backgroundColor: 'var(--input-bg)', color: 'var(--text-main)', fontSize: '1.1em' }}
                 />
               </div>
               <div className="actions">
@@ -836,7 +845,7 @@ function App() {
                     <img 
                       src={getAssetUrl('template', activeTemplate)} 
                       alt="Layout Preview"
-                      style={{ width: '100%', height: 'auto', display: 'block', border: '1px solid #ddd', borderRadius: '4px' }}
+                      style={{ width: '100%', height: 'auto', display: 'block', border: '1px solid var(--border-color)', borderRadius: '4px' }}
                       onLoad={(e) => {
                          const img = e.target;
                          const config = appConfig[activeTemplate];
@@ -981,13 +990,13 @@ function App() {
         <div className="modal-overlay" onClick={() => setShowFolderModal(false)}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ width: '80%', maxWidth: '600px', maxHeight: '80vh', display: 'flex', flexDirection: 'column' }}>
             <h2>Select Server Folder</h2>
-            <div style={{ padding: '10px', background: '#f5f5f5', borderRadius: '4px', marginBottom: '10px', wordBreak: 'break-all', color: '#333' }}>
+            <div style={{ padding: '10px', background: 'var(--input-bg)', borderRadius: '4px', marginBottom: '10px', wordBreak: 'break-all', color: 'var(--text-main)' }}>
               <strong>Current:</strong> {browsePath}
             </div>
-            <ul style={{ flex: 1, overflowY: 'auto', listStyleType: 'none', padding: 0, margin: '0 0 15px 0', border: '1px solid #ddd', borderRadius: '4px' }}>
+            <ul style={{ flex: 1, overflowY: 'auto', listStyleType: 'none', padding: 0, margin: '0 0 15px 0', border: '1px solid var(--border-color)', borderRadius: '4px' }}>
               <li 
                 onClick={() => fetchDirectories(browsePath + '/..')}
-                style={{ padding: '10px', cursor: 'pointer', borderBottom: '1px solid #eee', background: '#fafafa', color: '#000' }}
+                style={{ padding: '10px', cursor: 'pointer', borderBottom: '1px solid var(--border-color)', background: 'var(--item-bg)', color: 'var(--text-main)' }}
               >
                 <span style={{ marginRight: '8px' }}>📁</span> .. (Go Up)
               </li>
@@ -995,12 +1004,12 @@ function App() {
                 <li 
                   key={dir} 
                   onClick={() => fetchDirectories(browsePath + '/' + dir)}
-                  style={{ padding: '10px', cursor: 'pointer', borderBottom: '1px solid #eee', color: '#000' }}
+                  style={{ padding: '10px', cursor: 'pointer', borderBottom: '1px solid var(--border-color)', color: 'var(--text-main)' }}
                 >
                   <span style={{ marginRight: '8px' }}>📁</span> {dir}
                 </li>
               ))}
-              {subDirs.length === 0 && <li style={{ padding: '10px', color: '#888' }}>No subfolders found.</li>}
+              {subDirs.length === 0 && <li style={{ padding: '10px', color: 'var(--text-muted)' }}>No subfolders found.</li>}
             </ul>
             <div className="actions" style={{ marginTop: 'auto', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
               <button onClick={() => setShowFolderModal(false)} className="reject-btn">Cancel</button>
