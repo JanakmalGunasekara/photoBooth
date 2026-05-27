@@ -86,6 +86,7 @@ const io = new Server(httpServer, {
 
 let watcher = null;
 let recentPhotos = [];
+let lastSessionUpdate = Date.now(); // To strictly track array updates
 
 function startWatcher(folderPath) {
     if (watcher) {
@@ -124,7 +125,7 @@ function startWatcher(folderPath) {
         const destinationPath = path.join(cameraFolder, fileName);
         
         // Function to retry copying if the file is locked by the camera software
-        const copyWithRetry = (src, dest, retries = 10, delay = 500) => {
+        const copyWithRetry = (src, dest, retries = 20, delay = 1000) => {
             fs.copyFile(src, dest, (err) => {
                 if (err) {
                     if (retries > 0) {
@@ -152,6 +153,8 @@ function startWatcher(folderPath) {
                 if (recentPhotos.length > 10) {
                     recentPhotos.length = 10;
                 }
+                
+                lastSessionUpdate = Date.now(); // Notify frontend that a change happened
 
                 // Emit the event with the URL that points to the internal folder
                 io.emit('NEW_PHOTO', {
@@ -317,12 +320,13 @@ app.get('/api/config', (req, res) => {
 
 // --- NEW: GET endpoint for latest photo polling ---
 app.get('/api/latest-photo', (req, res) => {
-    res.status(200).json({ recent: recentPhotos });
+    res.status(200).json({ recent: recentPhotos, lastUpdate: lastSessionUpdate });
 });
 
 // --- NEW: POST endpoint to clear recent photos for a new session ---
 app.post('/api/clear-session', (req, res) => {
     recentPhotos = [];
+    lastSessionUpdate = Date.now();
     res.status(200).json({ success: true, message: 'Recent photos cleared for new session.' });
 });
 
@@ -354,6 +358,7 @@ app.delete('/api/photos/:photoName', (req, res) => {
             });
         }
 
+        lastSessionUpdate = Date.now(); // Notify frontend
         console.log(`🗑️ Photo deleted: ${photoName}`);
         res.status(200).json({ success: true, message: `Photo '${photoName}' deleted.` });
     });

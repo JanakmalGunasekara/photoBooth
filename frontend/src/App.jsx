@@ -40,6 +40,7 @@ function App() {
   const [startPoint, setStartPoint] = useState({ x: 0, y: 0 });
   const templateImageRef = useRef(null);
   const lastPhotoNameRef = useRef(null);
+  const lastUpdateRef = useRef(null); // Ref to track overall session updates
   const dragRef = useRef({ isDragging: false, index: -1, startX: 0, startY: 0, startPos: {x:50, y:50} });
 
   // --- Main Effect Hook ---
@@ -90,12 +91,17 @@ function App() {
         const res = await fetch(`${BACKEND_URL}/api/latest-photo`);
         if (res.ok) {
           const data = await res.json();
-          if (data.recent && Array.isArray(data.recent) && data.recent.length > 0) {
-             const latestName = data.recent[0].name;
-             if (latestName !== lastPhotoNameRef.current) {
-                 lastPhotoNameRef.current = latestName;
-                 setRecentPhotos(data.recent);
-                 setHighlightedPhoto(latestName);
+          if (data.lastUpdate !== lastUpdateRef.current) {
+             lastUpdateRef.current = data.lastUpdate;
+             setRecentPhotos(data.recent || []);
+             
+             if (data.recent && data.recent.length > 0) {
+                 const topName = data.recent[0].name;
+                 if (topName !== lastPhotoNameRef.current || data.recent[0].timestamp) {
+                     // Triggers highlight if it's a new name OR an overwritten file
+                     lastPhotoNameRef.current = topName;
+                     setHighlightedPhoto(topName);
+                 }
              }
           }
         }
@@ -232,6 +238,7 @@ function App() {
     setPhotoPositions([]);
     setEmailAddress('');
     lastPhotoNameRef.current = null;
+    lastUpdateRef.current = null;
   };
 
   const handlePrint = async () => {
@@ -612,25 +619,27 @@ function App() {
   return (
     <div className="dashboard">
       <style>{`
-        .recent-photos-row { display: flex; flex-wrap: nowrap; overflow-x: auto; gap: 10px; padding: 10px 0; justify-content: flex-start; }
-        .photo-thumbnail { flex: 0 0 auto; position: relative; cursor: pointer; border: 3px solid transparent; width: 100px; height: auto; border-radius: 8px; overflow: hidden; opacity: 0.6; transition: all 0.2s ease; }
-        .photo-thumbnail:hover { opacity: 0.8; }
-        .photo-thumbnail.active-highlight { opacity: 1; box-shadow: 0 0 0 3px #e1a9b8; }
-        .photo-thumbnail.selected { opacity: 1; border-color: #4CAF50; }
+        .recent-photos-row { display: flex; flex-wrap: nowrap; overflow-x: auto; gap: 15px; padding: 15px 5px; justify-content: flex-start; }
+        .recent-photos-row::-webkit-scrollbar { height: 8px; }
+        .recent-photos-row::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 4px; }
+        .photo-thumbnail { flex: 0 0 auto; position: relative; cursor: pointer; border: 2px solid transparent; width: 110px; height: auto; border-radius: 12px; overflow: hidden; opacity: 0.7; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); box-shadow: 0 4px 6px rgba(0,0,0,0.2); }
+        .photo-thumbnail:hover { opacity: 1; transform: translateY(-5px); box-shadow: 0 10px 15px rgba(0,0,0,0.4); }
+        .photo-thumbnail.active-highlight { opacity: 1; box-shadow: 0 0 0 3px #ff9a9e, 0 8px 15px rgba(255, 154, 158, 0.4); }
+        .photo-thumbnail.selected { opacity: 1; border-color: transparent; box-shadow: 0 0 0 3px #28a745, 0 8px 15px rgba(40, 167, 69, 0.4); }
         .photo-thumbnail img { width: 100%; height: auto; display: block; }
-        .photo-thumbnail .badge { position: absolute; top: 5px; right: 5px; background: #4CAF50; color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.3); }
+        .photo-thumbnail .badge { position: absolute; top: 6px; right: 6px; background: #28a745; color: white; border-radius: 50%; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 12px; box-shadow: 0 2px 5px rgba(0,0,0,0.4); }
         .selection-box { position: absolute; border: 2px dashed #ff0000; background: rgba(255, 0, 0, 0.2); pointer-events: none; }
         .selection-box .box-index { position: absolute; top: 0; left: 0; background: red; color: white; padding: 2px 6px; font-size: 14px; font-weight: bold; }
-        .highlighted-photo-container { margin-top: 15px; background: #1a1a1a; border: 2px solid #444; border-radius: 8px; padding: 15px; display: flex; justify-content: center; align-items: center; min-height: 400px; }
+        .highlighted-photo-container { margin-top: 15px; background: #181818; border: 1px solid rgba(255,255,255,0.05); box-shadow: inset 0 2px 10px rgba(0,0,0,0.5); border-radius: 12px; padding: 20px; display: flex; justify-content: center; align-items: center; min-height: 420px; }
         .highlighted-photo-wrapper { position: relative; display: flex; flex-direction: column; align-items: center; gap: 15px; width: 100%; }
-        .highlighted-img { max-height: 50vh; max-width: 100%; border-radius: 4px; object-fit: contain; }
-        .large-badge { position: absolute; top: 10px; right: 10px; background: #4CAF50; color: white; border-radius: 50%; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 20px; box-shadow: 0 4px 8px rgba(0,0,0,0.5); z-index: 2; }
+        .highlighted-img { max-height: 50vh; max-width: 100%; border-radius: 8px; object-fit: contain; box-shadow: 0 5px 15px rgba(0,0,0,0.5); }
+        .large-badge { position: absolute; top: -10px; right: -10px; background: #28a745; color: white; border-radius: 50%; width: 45px; height: 45px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 22px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); z-index: 2; }
         .highlighted-actions { display: flex; gap: 10px; }
-        .photo-instructions { margin-top: 10px; font-weight: bold; color: #555; }
-        .delete-photo-btn { position: absolute; top: 5px; left: 5px; background: rgba(220, 53, 69, 0.8); color: white; border: none; border-radius: 50%; width: 20px; height: 20px; font-size: 14px; font-weight: bold; cursor: pointer; display: flex; align-items: center; justify-content: center; z-index: 5; padding: 0; line-height: 1; }
-        .delete-photo-btn:hover { background: #dc3545; }
-        .back-arrow-btn { position: absolute; top: 15px; left: 15px; background: transparent; border: none; font-size: 1.8rem; color: #e1a9b8; cursor: pointer; padding: 0; line-height: 1; transition: transform 0.2s; z-index: 100; }
-        .back-arrow-btn:hover { color: #fff; transform: scale(1.1); }
+        .photo-instructions { margin-top: 10px; font-weight: 500; color: #aaa; background: rgba(255,255,255,0.05); padding: 10px; border-radius: 8px; }
+        .delete-photo-btn { position: absolute; top: 6px; left: 6px; background: rgba(220, 53, 69, 0.9); color: white; border: none; border-radius: 50%; width: 24px; height: 24px; font-size: 16px; font-weight: bold; cursor: pointer; display: flex; align-items: center; justify-content: center; z-index: 5; padding: 0; line-height: 1; transition: all 0.2s; box-shadow: 0 2px 4px rgba(0,0,0,0.3); }
+        .delete-photo-btn:hover { background: #dc3545; transform: scale(1.15) rotate(90deg); }
+        .back-arrow-btn { position: absolute; top: 20px; left: 20px; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); width: 45px; height: 45px; border-radius: 50%; display: flex; justify-content: center; align-items: center; font-size: 1.5rem; color: #ff9a9e; cursor: pointer; padding: 0; transition: all 0.3s; z-index: 100; box-shadow: 0 4px 6px rgba(0,0,0,0.2); }
+        .back-arrow-btn:hover { background: var(--accent-pink); color: #121212; transform: translateX(-5px); box-shadow: 0 6px 12px rgba(255, 154, 158, 0.3); }
       `}</style>
       <header className="header">
         <h1>Photo Booth Dashboard</h1>
@@ -639,7 +648,7 @@ function App() {
         </div>
         <div className="mode-switcher">
           <button onClick={() => setMode('live')} className={mode === 'live' ? 'active' : ''}>Live Booth</button>
-          <button onClick={() => setMode('setup')} className={mode === 'setup' ? 'active' : ''}>Template Setup</button>
+          <button onClick={() => setMode('setup')} className={mode === 'setup' ? 'active' : ''}>Settings</button>
         </div>
       </header>
 
