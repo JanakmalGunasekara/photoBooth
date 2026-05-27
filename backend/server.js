@@ -318,7 +318,7 @@ app.post('/api/clear-session', (req, res) => {
 
 // --- UPDATED: POST endpoint for PREVIEWING a merged image (in-memory) ---
 app.post('/api/merge', async (req, res) => {
-    const { guestPhotoNames, templateName } = req.body;
+    const { guestPhotoNames, templateName, positions } = req.body;
 
     if (!guestPhotoNames || !Array.isArray(guestPhotoNames) || guestPhotoNames.length === 0 || !templateName) {
         return res.status(400).json({ error: 'guestPhotoNames array and templateName are required.' });
@@ -361,11 +361,27 @@ app.post('/api/merge', async (req, res) => {
         for (let i = 0; i < photosToMerge.length; i++) {
             const photoName = photosToMerge[i];
             const area = areas[i];
+            const position = positions && positions[i] ? positions[i] : { x: 50, y: 50 };
             const resolvedGuestPhotoPath = path.join(cameraFolder, photoName);
 
             if (fs.existsSync(resolvedGuestPhotoPath)) {
+                const imgMeta = await sharp(resolvedGuestPhotoPath).metadata();
+                const imgW = imgMeta.width;
+                const imgH = imgMeta.height;
+                
+                const S = Math.max(area.width / imgW, area.height / imgH);
+                const scaledW = Math.round(imgW * S);
+                const scaledH = Math.round(imgH * S);
+                
+                let extractX = Math.round(((scaledW - area.width) * position.x) / 100);
+                let extractY = Math.round(((scaledH - area.height) * position.y) / 100);
+                
+                extractX = Math.max(0, Math.min(extractX, scaledW - Math.round(area.width)));
+                extractY = Math.max(0, Math.min(extractY, scaledH - Math.round(area.height)));
+
                 const guestPhotoBuffer = await sharp(resolvedGuestPhotoPath)
-                    .resize({ width: Math.round(area.width), height: Math.round(area.height), fit: sharp.fit.cover, position: sharp.strategy.attention })
+                    .resize({ width: scaledW, height: scaledH })
+                    .extract({ left: extractX, top: extractY, width: Math.round(area.width), height: Math.round(area.height) })
                     .toBuffer();
                 
                 compositeOperations.push({ input: guestPhotoBuffer, top: Math.round(area.y), left: Math.round(area.x) });
@@ -404,7 +420,7 @@ app.post('/api/merge', async (req, res) => {
 
 // --- UPDATED: POST endpoint for printing (saves and then prints) ---
 app.post('/api/print', async (req, res) => {
-    const { guestPhotoNames, templateName, printerName, copies = 1 } = req.body;
+    const { guestPhotoNames, templateName, printerName, copies = 1, positions } = req.body;
 
     if (!guestPhotoNames || !Array.isArray(guestPhotoNames) || guestPhotoNames.length === 0 || !templateName) {
         return res.status(400).json({ error: 'guestPhotoNames array and templateName are required.' });
@@ -448,14 +464,27 @@ app.post('/api/print', async (req, res) => {
         for (let i = 0; i < photosToMerge.length; i++) {
             const photoName = photosToMerge[i];
             const area = areas[i];
+            const position = positions && positions[i] ? positions[i] : { x: 50, y: 50 };
             const guestPhotoPath = path.join(cameraFolder, photoName);
 
             if (fs.existsSync(guestPhotoPath)) {
-                const resizeWidth = Math.round(Math.min(Number(area.width), templateWidth));
-                const resizeHeight = Math.round(Math.min(Number(area.height), templateHeight));
+                const imgMeta = await sharp(guestPhotoPath).metadata();
+                const imgW = imgMeta.width;
+                const imgH = imgMeta.height;
+                
+                const S = Math.max(area.width / imgW, area.height / imgH);
+                const scaledW = Math.round(imgW * S);
+                const scaledH = Math.round(imgH * S);
+                
+                let extractX = Math.round(((scaledW - area.width) * position.x) / 100);
+                let extractY = Math.round(((scaledH - area.height) * position.y) / 100);
+                
+                extractX = Math.max(0, Math.min(extractX, scaledW - Math.round(area.width)));
+                extractY = Math.max(0, Math.min(extractY, scaledH - Math.round(area.height)));
 
                 const resizedGuestPhoto = await sharp(guestPhotoPath)
-                    .resize({ width: resizeWidth, height: resizeHeight, fit: sharp.fit.cover, position: sharp.strategy.attention })
+                    .resize({ width: scaledW, height: scaledH })
+                    .extract({ left: extractX, top: extractY, width: Math.round(area.width), height: Math.round(area.height) })
                     .toBuffer();
                 
                 compositeOperations.push({ input: resizedGuestPhoto, top: Math.round(area.y), left: Math.round(area.x) });

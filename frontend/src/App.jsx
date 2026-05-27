@@ -12,11 +12,15 @@ function App() {
   // Live Booth Mode State
   const [recentPhotos, setRecentPhotos] = useState([]);
   const [selectedPhotos, setSelectedPhotos] = useState([]);
-  const [mergedPhoto, setMergedPhoto] = useState(null); // { url, originalNames, templateName }
+  const [isPreviewMode, setIsPreviewMode] = useState(false); // To show the interactive editor
+  const [photoPositions, setPhotoPositions] = useState([]); // Array of {x: 50, y: 50}
+  const [templateScale, setTemplateScale] = useState(1);
+  const previewContainerRef = useRef(null);
   const [highlightedPhoto, setHighlightedPhoto] = useState(null); // To view a single photo clearly
   const [liveTemplateBoxes, setLiveTemplateBoxes] = useState([]); // To preview layout in live mode
   const [printers, setPrinters] = useState([]);
   const [selectedPrinter, setSelectedPrinter] = useState('');
+  const [printCopies, setPrintCopies] = useState(1);
   const [templates, setTemplates] = useState([]);
   const [activeTemplate, setActiveTemplate] = useState('');
   const [cameraFolderPath, setCameraFolderPath] = useState('');
@@ -35,6 +39,7 @@ function App() {
   const [startPoint, setStartPoint] = useState({ x: 0, y: 0 });
   const templateImageRef = useRef(null);
   const lastPhotoNameRef = useRef(null);
+  const dragRef = useRef({ isDragging: false, index: -1, startX: 0, startY: 0, startPos: {x:50, y:50} });
 
   // --- Main Effect Hook ---
   useEffect(() => {
@@ -105,6 +110,47 @@ function App() {
     };
   }, [mode]); // Re-run effect if mode changes to fetch config
 
+  // --- Global Drag & Resize Handlers for Interactive Preview ---
+  useEffect(() => {
+    const handleMouseMove = (e) => {
+        if (!dragRef.current.isDragging) return;
+        if (e.cancelable) e.preventDefault(); // Prevent page scroll while dragging
+        const clientX = e.touches && e.touches.length > 0 ? e.touches[0].clientX : e.clientX;
+        const clientY = e.touches && e.touches.length > 0 ? e.touches[0].clientY : e.clientY;
+        
+        const deltaX = clientX - dragRef.current.startX;
+        const deltaY = clientY - dragRef.current.startY;
+        const sensitivity = 0.5; // Drag speed
+        
+        setPhotoPositions(prev => {
+            const newPos = [...prev];
+            const startPos = dragRef.current.startPos;
+            newPos[dragRef.current.index] = {
+                x: Math.max(0, Math.min(100, startPos.x - deltaX * sensitivity)),
+                y: Math.max(0, Math.min(100, startPos.y - deltaY * sensitivity))
+            };
+            return newPos;
+        });
+    };
+
+    const handleMouseUp = () => {
+        dragRef.current.isDragging = false;
+    };
+
+    if (isPreviewMode) {
+        window.addEventListener('mousemove', handleMouseMove);
+        window.addEventListener('mouseup', handleMouseUp);
+        window.addEventListener('touchmove', handleMouseMove, { passive: false });
+        window.addEventListener('touchend', handleMouseUp);
+    }
+    return () => {
+        window.removeEventListener('mousemove', handleMouseMove);
+        window.removeEventListener('mouseup', handleMouseUp);
+        window.removeEventListener('touchmove', handleMouseMove);
+        window.removeEventListener('touchend', handleMouseUp);
+    };
+  }, [isPreviewMode]);
+
   // Helper to get the correct asset URL based on environment
   const getAssetUrl = (type, name) => {
     return `${BACKEND_URL}/${type}s/${name}`;
@@ -121,48 +167,22 @@ function App() {
         if (selectedPhotos.length < requiredPhotos) {
            setSelectedPhotos([...selectedPhotos, photoName]);
         } else {
-           alert(`This template requires exactly ${requiredPhotos} photo(s).`);
+           console.warn(`This template requires exactly ${requiredPhotos} photo(s).`);
         }
      }
   };
 
   // --- Live Booth Mode Handlers ---
-  const handleApproveAndPreview = async () => {
+  const handleApproveAndPreview = () => {
     if (selectedPhotos.length !== requiredPhotos || isProcessing) return;
-    setIsProcessing(true);
-    try {
-      const res = await fetch(`${BACKEND_URL}/api/merge`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          guestPhotoNames: selectedPhotos,
-          templateName: activeTemplate,
-        }),
-      });
+    // Instantly transition to Interactive Preview Mode
+    setPhotoPositions(Array(requiredPhotos).fill({x: 50, y: 50}));
+    setIsPreviewMode(true);
+  };
 
-      if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.error || 'Failed to merge image');
-      }
-
-      const data = await res.json();
-
-      setMergedPhoto({
-        url: data.outputUrl,
-        originalNames: selectedPhotos,
-        templateName: activeTemplate,
-      });
-      setSelectedPhotos([]);
-      setTimeout(() => {
-        alert('Photo approved! Review the final card before saving or printing.');
-      }, 0); // Allow UI to update before showing alert
-    } catch (error) {
-      const errorMessage = error.message || 'An unknown error occurred.';
-      alert(`Failed to process photo: ${errorMessage}`);
-      console.error('Error merging/printing:', error);
-    } finally {
-      setIsProcessing(false);
-    }
+  const handleBackToSelection = () => {
+    if (isProcessing) return;
+    setIsPreviewMode(false); // Go back to selection mode without clearing photos
   };
 
   const handleReject = async () => {
@@ -184,28 +204,23 @@ function App() {
     setRecentPhotos([]);
     setSelectedPhotos([]);
     setHighlightedPhoto(null);
-    setMergedPhoto(null);
+    setIsPreviewMode(false);
+    setPhotoPositions([]);
     lastPhotoNameRef.current = null;
   };
 
   const handlePrint = async () => {
-    if (!mergedPhoto || isProcessing) return;
+    if (!isPreviewMode || isProcessing) return;
     
-    const copiesStr = prompt("How many copies would you like to print?", "1");
-    if (copiesStr === null) return;
-    const copies = parseInt(copiesStr, 10);
-    if (isNaN(copies) || copies < 1) {
-        alert("Invalid number of copies.");
-        return;
-    }
-
+    const copies = printCopies;
     setIsProcessing(true);
 
     const printConfig = {
-      guestPhotoNames: mergedPhoto.originalNames,
-      templateName: mergedPhoto.templateName,
+      guestPhotoNames: selectedPhotos,
+      templateName: activeTemplate,
       printerName: selectedPrinter,
-      copies: copies
+      copies: copies,
+      positions: photoPositions
     };
 
     try {
@@ -221,36 +236,48 @@ function App() {
       }
 
       await resetSession(); // Reset the view and clear photos
-      setTimeout(() => {
-        alert(`Print command sent for ${copies} copy(ies)! Ready for new images.`);
-      }, 0); // Allow UI to update before showing alert
+      console.log(`Print command sent for ${copies} copy(ies)! Ready for new images.`);
     } catch (error) {
       const errorMessage = error.message || 'An unknown error occurred.';
-      alert(`Failed to print image: ${errorMessage}`);
-      console.error(`Error during print action:`, error);
+      console.error(`Failed to print image: ${errorMessage}`, error);
     } finally {
       setIsProcessing(false);
     }
   };
 
   const handleDownload = async () => {
-    if (!mergedPhoto) return;
+    if (!isPreviewMode) return;
 
-    // Create a link element in memory
-    const link = document.createElement('a');
-    // The mergedPhoto.url is a 'data:image/jpeg;base64,...' URL from the preview
-    link.href = mergedPhoto.url;
-    // Suggest a filename for the user's "Save As" dialog
-    link.download = `photobooth-${Date.now()}.jpg`;
+    setIsProcessing(true);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/merge`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          guestPhotoNames: selectedPhotos,
+          templateName: activeTemplate,
+          positions: photoPositions
+        }),
+      });
 
-    // Append to the document, programmatically click it, and then remove it
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    await resetSession(); // Reset the view and clear photos
-    setTimeout(() => {
-      alert('Image saved! Ready for new images.');
-    }, 0); // Allow UI to update before showing alert
+      if (!res.ok) throw new Error('Failed to merge image');
+      const data = await res.json();
+
+      const link = document.createElement('a');
+      link.href = data.outputUrl;
+      link.download = `photobooth-${Date.now()}.jpg`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+
+      await resetSession();
+      console.log('Image saved! Ready for new images.');
+    } catch (error) {
+      console.error('Failed to save image.');
+      console.error(error);
+    } finally {
+      setIsProcessing(false);
+    }
   };
 
   // --- Template Setup Mode Handlers ---
@@ -265,7 +292,7 @@ function App() {
   const handleMouseDown = (e) => {
     if (mode !== 'setup') return;
     if (selectionBoxes.length >= 4) {
-      alert("Maximum of 4 selection areas allowed.");
+      console.warn("Maximum of 4 selection areas allowed.");
       return;
     }
     setIsDrawing(true);
@@ -330,7 +357,7 @@ function App() {
 
   const handleSaveConfig = async () => {
     if (selectionBoxes.length === 0) {
-      alert("Please draw at least one selection box on the template.");
+      console.warn("Please draw at least one selection box on the template.");
       return;
     }
     const img = templateImageRef.current;
@@ -362,12 +389,9 @@ function App() {
 
       setSelectedTemplateForEditing(null); // Go back to the template list
       setSelectionBoxes([]); // Reset selection
-      setTimeout(() => {
-        alert(`Configuration saved for ${selectedTemplateForEditing}!`);
-      }, 0); // Allow UI to update before showing alert
+      console.log(`Configuration saved for ${selectedTemplateForEditing}!`);
     } catch (error) {
-      alert("Failed to save configuration. Check the console.");
-      console.error("Error saving config:", error);
+      console.error("Failed to save configuration. Check the console.", error);
     }
   };
 
@@ -400,11 +424,22 @@ function App() {
         }
       }
     } catch (error) {
-      alert('Failed to delete template. See console for details.');
-      console.error('Error deleting template:', error);
+      console.error('Failed to delete template. See console for details.', error);
     } finally {
       setIsProcessing(false);
     }
+  };
+
+  const handlePhotoDragStart = (e, index) => {
+      // Prevent standard browser dragging on images
+      if (e.cancelable && e.type !== 'touchstart') e.preventDefault(); 
+      dragRef.current = {
+          isDragging: true,
+          index,
+          startX: e.touches && e.touches.length > 0 ? e.touches[0].clientX : e.clientX,
+          startY: e.touches && e.touches.length > 0 ? e.touches[0].clientY : e.clientY,
+          startPos: photoPositions[index] || {x: 50, y: 50}
+      };
   };
 
   const handleTemplateUpload = async (event) => {
@@ -431,12 +466,9 @@ function App() {
         const templateList = await templateRes.json();
         setTemplates(templateList);
       }
-      setTimeout(() => {
-        alert(`Template '${file.name}' uploaded successfully!`);
-      }, 0); // Allow UI to update before showing alert
+      console.log(`Template '${file.name}' uploaded successfully!`);
     } catch (error) {
-      alert('Failed to upload template. See console for details.');
-      console.error('Error uploading template:', error);
+      console.error('Failed to upload template. See console for details.', error);
     } finally {
       setIsProcessing(false);
       event.target.value = null; // Clear the input so the same file can be uploaded again if needed
@@ -476,7 +508,7 @@ function App() {
 
   const handleSetCameraFolder = async () => {
     if (!cameraFolderPath.trim()) {
-      alert("Please enter a valid folder path.");
+      console.warn("Please enter a valid folder path.");
       return;
     }
     setIsProcessing(true);
@@ -493,13 +525,10 @@ function App() {
       }
 
       const data = await res.json();
-      setTimeout(() => {
-        alert(data.message || 'Camera folder set successfully');
-      }, 0); // Allow UI to update before showing alert
+      console.log(data.message || 'Camera folder set successfully');
     } catch (error) {
       const errorMessage = error.message || 'An unknown error occurred.';
-      alert(`Failed to set camera folder: ${errorMessage}`);
-      console.error("Error setting camera folder:", error);
+      console.error(`Failed to set camera folder: ${errorMessage}`, error);
     } finally {
       setIsProcessing(false);
     }
@@ -537,13 +566,59 @@ function App() {
       </header>
 
       {mode === 'live' ? (
-        mergedPhoto ? (
+        isPreviewMode ? (
           // --- Final Preview and Action Step ---
           <main className="main-content">
-            <div className="preview-container">
-              <h2>Final Preview</h2>
-              <div className="photo-review">
-                <img src={mergedPhoto.url} alt="Final merged card" />
+            <div className="preview-container" ref={previewContainerRef}>
+              <h2>Final Preview (Drag photos to adjust)</h2>
+              <div className="photo-review" style={{ position: 'relative', display: 'inline-block', maxWidth: '100%', overflow: 'hidden', borderRadius: '8px' }}>
+                <img 
+                  src={getAssetUrl('template', activeTemplate)} 
+                  alt="Final merged card"
+                  className="template-bg"
+                  style={{ width: '100%', height: 'auto', display: 'block', position: 'relative', zIndex: 10, pointerEvents: 'none' }}
+                  onLoad={(e) => {
+                     const img = e.target;
+                     setTemplateScale(img.clientWidth / img.naturalWidth);
+                  }}
+                />
+                {(() => {
+                   let areas = activeTemplateConfig.areas;
+                   if (!areas && activeTemplateConfig.x !== undefined) {
+                     areas = [{ x: activeTemplateConfig.x, y: activeTemplateConfig.y, width: activeTemplateConfig.width, height: activeTemplateConfig.height }];
+                   }
+                   return areas && areas.slice(0, selectedPhotos.length).map((area, idx) => {
+                     const pos = photoPositions[idx] || {x: 50, y: 50};
+                     return (
+                       <div 
+                         key={idx}
+                         style={{
+                           position: 'absolute',
+                           left: area.x * templateScale,
+                           top: area.y * templateScale,
+                           width: area.width * templateScale,
+                           height: area.height * templateScale,
+                           overflow: 'hidden',
+                           zIndex: 1,
+                           cursor: 'grab',
+                           boxShadow: '0 0 0 2px rgba(255,255,255,0.5)'
+                         }}
+                         onMouseDown={(e) => handlePhotoDragStart(e, idx)}
+                         onTouchStart={(e) => handlePhotoDragStart(e, idx)}
+                       >
+                          <img 
+                            src={getAssetUrl('photo', selectedPhotos[idx])} 
+                            style={{
+                              width: '100%', height: '100%', 
+                              objectFit: 'cover', objectPosition: `${pos.x}% ${pos.y}%`,
+                              pointerEvents: 'none', display: 'block'
+                            }} 
+                            alt="Guest"
+                          />
+                       </div>
+                     );
+                   });
+                })()}
               </div>
             </div>
             <div className="controls-container">
@@ -554,12 +629,28 @@ function App() {
                   {printers.length > 0 ? printers.map(p => <option key={p} value={p}>{p}</option>) : <option>No printers found</option>}
                 </select>
               </div>
+              <div className="control-group" style={{ flexDirection: 'row', gap: '10px' }}>
+                <label htmlFor="print-copies" style={{ fontSize: '1.1em' }}>Copies:</label>
+                <input
+                  id="print-copies"
+                  type="number"
+                  min="1"
+                  max="50"
+                  value={printCopies}
+                  onChange={(e) => setPrintCopies(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                  disabled={isProcessing}
+                  style={{ width: '70px', padding: '0.4em', borderRadius: '4px', border: '1px solid #666', backgroundColor: '#444', color: 'white', textAlign: 'center', fontSize: '1.1em' }}
+                />
+              </div>
               <div className="actions">
                 <button onClick={handlePrint} disabled={isProcessing} className="approve-btn">
                   {isProcessing ? 'Printing...' : '🖨️ Print Now'}
                 </button>
                 <button onClick={handleDownload} disabled={isProcessing} className="download-btn">
                   💾 Save as JPG...
+                </button>
+                <button onClick={handleBackToSelection} disabled={isProcessing} className="reject-btn" style={{ backgroundColor: '#6c757d', borderColor: '#5a6268' }}>
+                  🔙 Back
                 </button>
                 <button onClick={handleReject} disabled={isProcessing} className="reject-btn">
                   ❌ Reject
