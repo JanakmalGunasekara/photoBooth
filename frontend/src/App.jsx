@@ -282,6 +282,7 @@ function App() {
       emailAddress: emailAddress
     };
 
+    let responseData = null;
     try {
       const res = await fetch(`${BACKEND_URL}/api/email`, {
         method: 'POST',
@@ -289,16 +290,30 @@ function App() {
         body: JSON.stringify(payload),
       });
 
+      responseData = await res.json();
+
+      // Trigger download to prompt user for save location
+      if (responseData.outputUrl) {
+        const link = document.createElement('a');
+        link.href = responseData.outputUrl;
+        link.download = `photobooth-${Date.now()}.jpg`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      }
+
       if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.error || 'Failed to send email');
+        throw new Error(responseData.error || 'Failed to send email');
       }
 
       await resetSession();
-      console.log(`Email sent to ${emailAddress}! Ready for new images.`);
+      console.log(`Email sent to ${emailAddress} and saved! Ready for new images.`);
     } catch (error) {
       const errorMessage = error.message || 'An unknown error occurred.';
-      console.error(`Failed to send email: ${errorMessage}`, error);
+      console.error(`Notice: ${errorMessage}`);
+      if (responseData && responseData.outputUrl) {
+        await resetSession(); // Reset if user was at least prompted to save
+      }
     } finally {
       setIsProcessing(false);
     }
@@ -991,7 +1006,7 @@ function App() {
 
       {showInstructions && (
         <div className="modal-overlay" onClick={() => setShowInstructions(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '800px', maxHeight: '80vh', overflowY: 'auto' }}>
             <h2>How to Use the Photo Booth System</h2>
             <ol>
               <li>
@@ -1006,22 +1021,30 @@ function App() {
               <li>
                 <strong>Template Setup:</strong>
                 <ul>
-                  <li>Switch to "Template Setup" mode using the button at the top.</li>
-                  <li>In the "Template Management" section, you can see all available templates.</li>
-                  <li>If your template isn't listed, use the "Choose File" button to upload it.</li>
-                  <li>Click on a template from the gallery to select it for editing.</li>
-                  <li>Click and drag your mouse over the template image to draw a box where the guest's photo should appear.</li>
-                  <li>Click "Save Configuration". A confirmation will appear.</li>
+                  <li>Switch to "Template Setup" mode.</li>
+                  <li>Select a template from the gallery or upload a new one.</li>
+                  <li>Click and drag your mouse over the template image to draw up to <strong>4 selection boxes</strong> in the exact order you want the photos to appear.</li>
+                  <li>Click "Save Configuration".</li>
                 </ul>
               </li>
               <li>
                 <strong>Live Booth Operation:</strong>
                 <ul>
-                  <li>Switch to "Live Booth" mode.</li>
-                  <li>Select the template you want to use from the "Active Template" dropdown.</li>
-                  <li>Take a photo with your camera. It will appear in the "Live Preview" area.</li>
-                  <li>Click "Approve & Preview Card". The system will show you the final merged image.</li>
-                  <li>In the "Finalize" panel, you can "Print Now", "Save as JPG..." to your computer, or "Reject".</li>
+                  <li>Switch to "Live Booth" mode and choose an "Active Template".</li>
+                  <li>Take photos with your camera. They will instantly appear in the thumbnails row.</li>
+                  <li>Click on the photos to <strong>select them in order</strong>. You must select the exact number of photos required by the template.</li>
+                  <li>Use the "🗑️ Delete" button (or the 'x' on thumbnails) to permanently remove bad photos.</li>
+                  <li>Click "Approve & Preview Card" once the required photos are selected.</li>
+                </ul>
+              </li>
+              <li>
+                <strong>Final Preview & Finalize:</strong>
+                <ul>
+                  <li><strong>Adjust:</strong> Click and drag the guest photos in the preview to adjust their positions inside the frames.</li>
+                  <li><strong>Print:</strong> Enter the number of copies and click "Print Now".</li>
+                  <li><strong>Email:</strong> Enter a guest's email and click "Send Email" (This will also prompt you to save a local backup).</li>
+                  <li><strong>Save:</strong> Click "Save as JPG..." to manually download the image.</li>
+                  <li><strong>Navigation:</strong> Use the top-left <strong>⬅ Back</strong> arrow to return to selection mode without losing photos, or <strong>❌ Reject</strong> to clear the session and start over.</li>
                 </ul>
               </li>
             </ol>

@@ -524,6 +524,9 @@ app.post('/api/email', async (req, res) => {
             create: { width: templateMetadata.width, height: templateMetadata.height, channels: 4, background: { r: 255, g: 255, b: 255, alpha: 1 } }
         }).composite(compositeOperations).jpeg().toFile(outputPath);
 
+        const outputBuffer = fs.readFileSync(outputPath);
+        const outputUrl = `data:image/jpeg;base64,${outputBuffer.toString('base64')}`;
+
         // --- ⚠️ UPDATE YOUR EMAIL CREDENTIALS HERE ⚠️ ---
         const transporter = nodemailer.createTransport({
             service: 'gmail',
@@ -543,10 +546,10 @@ app.post('/api/email', async (req, res) => {
 
         await transporter.sendMail(mailOptions);
         console.log(`✅ Final image emailed to: ${emailAddress}`);
-        res.status(200).json({ success: true, message: `Image saved and emailed.` });
+        res.status(200).json({ success: true, message: `Image emailed and ready to save.`, outputUrl });
     } catch (error) {
         console.error('--- EMAIL PROCESS ERROR ---', error);
-        res.status(500).json({ error: 'Email finalization failed.', details: error.message });
+        res.status(500).json({ error: 'Email failed to send.', details: error.message, outputUrl });
     }
 });
 
