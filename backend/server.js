@@ -102,12 +102,15 @@ function startWatcher(folderPath) {
     console.log(`Starting to watch for new photos in: ${folderPath}`);
     watcher = chokidar.watch(folderPath, {
         ignoreInitial: true,
+        usePolling: true,
+        interval: 500,
         awaitWriteFinish: {
-            stabilityThreshold: 2000,
-            pollInterval: 200
+            stabilityThreshold: 500,
+            pollInterval: 100
         },
         ignorePermissionErrors: true // Prevents crashes on restricted system folders
-    }).on('add', (filePath) => {
+    }).on('all', (event, filePath) => {
+        if (event !== 'add' && event !== 'change') return;
         const fileName = path.basename(filePath);
         
         // Ignore non-image files (like temporary files created by camera software)
@@ -121,7 +124,7 @@ function startWatcher(folderPath) {
         const destinationPath = path.join(cameraFolder, fileName);
         
         // Function to retry copying if the file is locked by the camera software
-        const copyWithRetry = (src, dest, retries = 5, delay = 500) => {
+        const copyWithRetry = (src, dest, retries = 10, delay = 500) => {
             fs.copyFile(src, dest, (err) => {
                 if (err) {
                     if (retries > 0) {
@@ -134,13 +137,20 @@ function startWatcher(folderPath) {
                 }
                 console.log(`✅ Copied ${fileName} to internal camera folder for serving.`);
             
+                // Remove existing entry to prevent duplicates on 'change' event
+                const existingIndex = recentPhotos.findIndex(p => p.name === fileName);
+                if (existingIndex !== -1) {
+                    recentPhotos.splice(existingIndex, 1);
+                }
+
                 const newPhoto = {
                     name: fileName,
-                    path: fileName
+                    path: fileName,
+                    timestamp: Date.now()
                 };
                 recentPhotos.unshift(newPhoto);
-                if (recentPhotos.length > 6) {
-                    recentPhotos.pop();
+                if (recentPhotos.length > 10) {
+                    recentPhotos.length = 10;
                 }
 
                 // Emit the event with the URL that points to the internal folder
@@ -316,6 +326,39 @@ app.post('/api/clear-session', (req, res) => {
     res.status(200).json({ success: true, message: 'Recent photos cleared for new session.' });
 });
 
+// --- NEW: DELETE endpoint to remove a specific photo ---
+app.delete('/api/photos/:photoName', (req, res) => {
+    const { photoName } = req.params;
+    
+    // Security: Prevent path traversal attacks
+    if (photoName.includes('..') || photoName.includes('/') || photoName.includes('\\')) {
+        return res.status(400).json({ error: 'Invalid photo name.' });
+    }
+
+    const photoPath = path.join(cameraFolder, photoName);
+    const originalPhotoPath = templateConfigs.cameraFolderPath ? path.join(templateConfigs.cameraFolderPath, photoName) : null;
+
+    const existingIndex = recentPhotos.findIndex(p => p.name === photoName);
+    if (existingIndex !== -1) {
+        recentPhotos.splice(existingIndex, 1);
+    }
+
+    fs.unlink(photoPath, (err) => {
+        if (err && err.code !== 'ENOENT') {
+            console.error(`Error deleting photo file ${photoPath}:`, err);
+        }
+        
+        if (originalPhotoPath && fs.existsSync(originalPhotoPath)) {
+            fs.unlink(originalPhotoPath, (err2) => {
+                if (err2) console.error(`Error deleting original photo ${originalPhotoPath}:`, err2);
+            });
+        }
+
+        console.log(`🗑️ Photo deleted: ${photoName}`);
+        res.status(200).json({ success: true, message: `Photo '${photoName}' deleted.` });
+    });
+});
+
 // --- UPDATED: POST endpoint for PREVIEWING a merged image (in-memory) ---
 app.post('/api/merge', async (req, res) => {
     const { guestPhotoNames, templateName, positions } = req.body;
@@ -415,6 +458,95 @@ app.post('/api/merge', async (req, res) => {
         console.error('--- IMAGE MERGE PREVIEW ERROR ---', error);
         console.error(error);
         res.status(500).json({ error: 'Image processing failed.', details: error.message });
+    }
+});
+
+// --- NEW: POST endpoint for Emailing the image ---
+app.post('/api/email', async (req, res) => {
+    const { guestPhotoNames, templateName, positions, emailAddress } = req.body;
+
+    if (!guestPhotoNames || !Array.isArray(guestPhotoNames) || guestPhotoNames.length === 0 || !templateName || !emailAddress) {
+        return res.status(400).json({ error: 'guestPhotoNames array, templateName, and emailAddress are required.' });
+    }
+
+    // Dynamically import nodemailer to prevent crashing if the user hasn't installed it yet
+    let nodemailer;
+    try {
+        nodemailer = (await import('nodemailer')).default;
+    } catch (err) {
+        console.error('Nodemailer not installed. Please run: npm install nodemailer');
+        return res.status(500).json({ error: 'Nodemailer is missing. Please run "npm install nodemailer" in the backend folder.' });
+    }
+
+    let config = templateConfigs[templateName] || DEFAULT_TEMPLATE_CONFIG[templateName];
+    if (!config) return res.status(404).json({ error: `No configuration found for template: ${templateName}.` });
+
+    let areas = config.areas || (config.x !== undefined ? [{ x: config.x, y: config.y, width: config.width, height: config.height }] : null);
+    if (!areas || areas.length === 0) return res.status(400).json({ error: `Template configuration is invalid.` });
+
+    const templatePath = path.join(templatesFolder, templateName);
+    const parsedGuestPhoto = path.parse(guestPhotoNames[0]);
+    const outputPath = path.join(outputsFolder, `email_${Date.now()}_${parsedGuestPhoto.name}.jpg`);
+
+    try {
+        if (!fs.existsSync(templatePath)) return res.status(404).json({ error: 'Template not found.' });
+
+        const templateMetadata = await sharp(templatePath).metadata();
+        const compositeOperations = [];
+        const photosToMerge = guestPhotoNames.slice(0, areas.length);
+
+        for (let i = 0; i < photosToMerge.length; i++) {
+            const photoName = photosToMerge[i];
+            const area = areas[i];
+            const position = positions && positions[i] ? positions[i] : { x: 50, y: 50 };
+            const guestPhotoPath = path.join(cameraFolder, photoName);
+
+            if (fs.existsSync(guestPhotoPath)) {
+                const imgMeta = await sharp(guestPhotoPath).metadata();
+                const S = Math.max(area.width / imgMeta.width, area.height / imgMeta.height);
+                const scaledW = Math.round(imgMeta.width * S);
+                const scaledH = Math.round(imgMeta.height * S);
+                
+                let extractX = Math.max(0, Math.min(Math.round(((scaledW - area.width) * position.x) / 100), scaledW - Math.round(area.width)));
+                let extractY = Math.max(0, Math.min(Math.round(((scaledH - area.height) * position.y) / 100), scaledH - Math.round(area.height)));
+
+                const resizedGuestPhoto = await sharp(guestPhotoPath)
+                    .resize({ width: scaledW, height: scaledH })
+                    .extract({ left: extractX, top: extractY, width: Math.round(area.width), height: Math.round(area.height) })
+                    .toBuffer();
+                
+                compositeOperations.push({ input: resizedGuestPhoto, top: Math.round(area.y), left: Math.round(area.x) });
+            }
+        }
+        compositeOperations.push({ input: templatePath, top: 0, left: 0 });
+
+        await sharp({
+            create: { width: templateMetadata.width, height: templateMetadata.height, channels: 4, background: { r: 255, g: 255, b: 255, alpha: 1 } }
+        }).composite(compositeOperations).jpeg().toFile(outputPath);
+
+        // --- ⚠️ UPDATE YOUR EMAIL CREDENTIALS HERE ⚠️ ---
+        const transporter = nodemailer.createTransport({
+            service: 'gmail',
+            auth: {
+                user: 'gmajgunasekara@gmail.com', // Replace with your Gmail address
+                pass: 'szskzcpskeipihmi'     // Replace with your App Password
+            }
+        });
+
+        const mailOptions = {
+            from: '"Photo Booth" <gmajgunasekara@gmail.com>', // Replace with your Gmail address
+            to: emailAddress,
+            subject: 'Your Photo Booth Picture!',
+            text: 'Thank you for using our photo booth! Please find your picture attached.',
+            attachments: [{ filename: path.basename(outputPath), path: outputPath }]
+        };
+
+        await transporter.sendMail(mailOptions);
+        console.log(`✅ Final image emailed to: ${emailAddress}`);
+        res.status(200).json({ success: true, message: `Image saved and emailed.` });
+    } catch (error) {
+        console.error('--- EMAIL PROCESS ERROR ---', error);
+        res.status(500).json({ error: 'Email finalization failed.', details: error.message });
     }
 });
 

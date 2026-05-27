@@ -21,6 +21,7 @@ function App() {
   const [printers, setPrinters] = useState([]);
   const [selectedPrinter, setSelectedPrinter] = useState('');
   const [printCopies, setPrintCopies] = useState(1);
+  const [emailAddress, setEmailAddress] = useState('');
   const [templates, setTemplates] = useState([]);
   const [activeTemplate, setActiveTemplate] = useState('');
   const [cameraFolderPath, setCameraFolderPath] = useState('');
@@ -152,8 +153,11 @@ function App() {
   }, [isPreviewMode]);
 
   // Helper to get the correct asset URL based on environment
-  const getAssetUrl = (type, name) => {
-    return `${BACKEND_URL}/${type}s/${name}`;
+  const getAssetUrl = (type, item) => {
+    if (item && typeof item === 'object') {
+      return `${BACKEND_URL}/${type}s/${item.name}?t=${item.timestamp || ''}`;
+    }
+    return `${BACKEND_URL}/${type}s/${item}`;
   };
 
   // Number of areas for active template
@@ -195,6 +199,26 @@ function App() {
     setSelectedPhotos([]);
   };
 
+  const handleDeletePhoto = async (photoName, e) => {
+    if (e) e.stopPropagation();
+    if (isProcessing) return;
+    
+    setIsProcessing(true);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/photos/${encodeURIComponent(photoName)}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error('Failed to delete photo');
+      
+      setRecentPhotos(prev => prev.filter(p => p.name !== photoName));
+      setSelectedPhotos(prev => prev.filter(p => p !== photoName));
+      if (highlightedPhoto === photoName) setHighlightedPhoto(null);
+      if (lastPhotoNameRef.current === photoName) lastPhotoNameRef.current = null;
+    } catch (error) {
+      console.error("Error deleting photo:", error);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const resetSession = async () => {
     try {
       await fetch(`${BACKEND_URL}/api/clear-session`, { method: 'POST' });
@@ -206,6 +230,7 @@ function App() {
     setHighlightedPhoto(null);
     setIsPreviewMode(false);
     setPhotoPositions([]);
+    setEmailAddress('');
     lastPhotoNameRef.current = null;
   };
 
@@ -240,6 +265,40 @@ function App() {
     } catch (error) {
       const errorMessage = error.message || 'An unknown error occurred.';
       console.error(`Failed to print image: ${errorMessage}`, error);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleEmail = async () => {
+    if (!isPreviewMode || isProcessing || !emailAddress) return;
+    
+    setIsProcessing(true);
+
+    const payload = {
+      guestPhotoNames: selectedPhotos,
+      templateName: activeTemplate,
+      positions: photoPositions,
+      emailAddress: emailAddress
+    };
+
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error || 'Failed to send email');
+      }
+
+      await resetSession();
+      console.log(`Email sent to ${emailAddress}! Ready for new images.`);
+    } catch (error) {
+      const errorMessage = error.message || 'An unknown error occurred.';
+      console.error(`Failed to send email: ${errorMessage}`, error);
     } finally {
       setIsProcessing(false);
     }
@@ -553,6 +612,10 @@ function App() {
         .large-badge { position: absolute; top: 10px; right: 10px; background: #4CAF50; color: white; border-radius: 50%; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 20px; box-shadow: 0 4px 8px rgba(0,0,0,0.5); z-index: 2; }
         .highlighted-actions { display: flex; gap: 10px; }
         .photo-instructions { margin-top: 10px; font-weight: bold; color: #555; }
+        .delete-photo-btn { position: absolute; top: 5px; left: 5px; background: rgba(220, 53, 69, 0.8); color: white; border: none; border-radius: 50%; width: 20px; height: 20px; font-size: 14px; font-weight: bold; cursor: pointer; display: flex; align-items: center; justify-content: center; z-index: 5; padding: 0; line-height: 1; }
+        .delete-photo-btn:hover { background: #dc3545; }
+        .back-arrow-btn { position: absolute; top: 15px; left: 15px; background: transparent; border: none; font-size: 1.8rem; color: #e1a9b8; cursor: pointer; padding: 0; line-height: 1; transition: transform 0.2s; z-index: 100; }
+        .back-arrow-btn:hover { color: #fff; transform: scale(1.1); }
       `}</style>
       <header className="header">
         <h1>Photo Booth Dashboard</h1>
@@ -607,7 +670,7 @@ function App() {
                          onTouchStart={(e) => handlePhotoDragStart(e, idx)}
                        >
                           <img 
-                            src={getAssetUrl('photo', selectedPhotos[idx])} 
+                            src={getAssetUrl('photo', recentPhotos.find(p => p.name === selectedPhotos[idx]) || selectedPhotos[idx])} 
                             style={{
                               width: '100%', height: '100%', 
                               objectFit: 'cover', objectPosition: `${pos.x}% ${pos.y}%`,
@@ -621,7 +684,8 @@ function App() {
                 })()}
               </div>
             </div>
-            <div className="controls-container">
+            <div className="controls-container" style={{ position: 'relative' }}>
+              <button onClick={handleBackToSelection} disabled={isProcessing} className="back-arrow-btn" title="Back to Selection">⬅</button>
               <h2>Finalize</h2>
               <div className="control-group">
                 <label htmlFor="printer-select">Select Printer:</label>
@@ -642,15 +706,27 @@ function App() {
                   style={{ width: '70px', padding: '0.4em', borderRadius: '4px', border: '1px solid #666', backgroundColor: '#444', color: 'white', textAlign: 'center', fontSize: '1.1em' }}
                 />
               </div>
+              <div className="control-group" style={{ flexDirection: 'row', gap: '10px' }}>
+                <label htmlFor="email-input" style={{ fontSize: '1.1em' }}>Email:</label>
+                <input
+                  id="email-input"
+                  type="email"
+                  placeholder="guest@example.com"
+                  value={emailAddress}
+                  onChange={(e) => setEmailAddress(e.target.value)}
+                  disabled={isProcessing}
+                  style={{ width: '200px', padding: '0.4em', borderRadius: '4px', border: '1px solid #666', backgroundColor: '#444', color: 'white', fontSize: '1.1em' }}
+                />
+              </div>
               <div className="actions">
                 <button onClick={handlePrint} disabled={isProcessing} className="approve-btn">
                   {isProcessing ? 'Printing...' : '🖨️ Print Now'}
                 </button>
+                <button onClick={handleEmail} disabled={isProcessing || !emailAddress} className="approve-btn" style={{ backgroundColor: '#007bff', borderColor: '#0056b3' }}>
+                  {isProcessing ? 'Sending...' : '✉️ Send Email'}
+                </button>
                 <button onClick={handleDownload} disabled={isProcessing} className="download-btn">
                   💾 Save as JPG...
-                </button>
-                <button onClick={handleBackToSelection} disabled={isProcessing} className="reject-btn" style={{ backgroundColor: '#6c757d', borderColor: '#5a6268' }}>
-                  🔙 Back
                 </button>
                 <button onClick={handleReject} disabled={isProcessing} className="reject-btn">
                   ❌ Reject
@@ -670,7 +746,7 @@ function App() {
               <div className="highlighted-photo-container">
                 {highlightedPhoto ? (
                     <div className="highlighted-photo-wrapper">
-                        <img src={getAssetUrl('photo', highlightedPhoto)} alt="Highlighted" className="highlighted-img" />
+                        <img src={getAssetUrl('photo', recentPhotos.find(p => p.name === highlightedPhoto) || highlightedPhoto)} alt="Highlighted" className="highlighted-img" />
                         {selectedPhotos.includes(highlightedPhoto) && (
                             <div className="large-badge">{selectedPhotos.indexOf(highlightedPhoto) + 1}</div>
                         )}
@@ -681,6 +757,13 @@ function App() {
                                 disabled={!selectedPhotos.includes(highlightedPhoto) && selectedPhotos.length >= requiredPhotos}
                             >
                                 {selectedPhotos.includes(highlightedPhoto) ? '❌ Deselect Photo' : '✅ Select Photo'}
+                            </button>
+                            <button
+                                className="reject-btn"
+                                onClick={(e) => handleDeletePhoto(highlightedPhoto, e)}
+                                disabled={isProcessing}
+                            >
+                                🗑️ Delete
                             </button>
                         </div>
                     </div>
@@ -700,8 +783,13 @@ function App() {
                             className={`photo-thumbnail ${isSelected ? 'selected' : ''} ${highlightedPhoto === photo.name ? 'active-highlight' : ''}`}
                             onClick={() => setHighlightedPhoto(photo.name)}
                         >
-                            <img src={getAssetUrl('photo', photo.name)} alt={photo.name} />
+                            <img src={getAssetUrl('photo', photo)} alt={photo.name} />
                             {isSelected && <div className="badge">{index + 1}</div>}
+                            <button
+                                className="delete-photo-btn"
+                                onClick={(e) => handleDeletePhoto(photo.name, e)}
+                                title="Delete Photo"
+                            >&times;</button>
                         </div>
                     );
                   })}
