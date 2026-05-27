@@ -50,10 +50,12 @@ if (fs.existsSync(configFilePath)) {
 // --- Default configuration for the main template to prevent errors on first run ---
 const DEFAULT_TEMPLATE_CONFIG = {
     'thank-you-template.png': {
-        x: 100,
-        y: 290,
-        width: 1040,
-        height: 1040
+        areas: [{
+            x: 100,
+            y: 290,
+            width: 1040,
+            height: 1040
+        }]
     }
 };
 
@@ -83,7 +85,7 @@ const io = new Server(httpServer, {
 });
 
 let watcher = null;
-let latestPhoto = null;
+let recentPhotos = [];
 
 function startWatcher(folderPath) {
     if (watcher) {
@@ -132,10 +134,14 @@ function startWatcher(folderPath) {
                 }
                 console.log(`✅ Copied ${fileName} to internal camera folder for serving.`);
             
-                latestPhoto = {
+                const newPhoto = {
                     name: fileName,
                     path: fileName
                 };
+                recentPhotos.unshift(newPhoto);
+                if (recentPhotos.length > 6) {
+                    recentPhotos.pop();
+                }
 
                 // Emit the event with the URL that points to the internal folder
                 io.emit('NEW_PHOTO', {
@@ -301,20 +307,21 @@ app.get('/api/config', (req, res) => {
 
 // --- NEW: GET endpoint for latest photo polling ---
 app.get('/api/latest-photo', (req, res) => {
-    if (latestPhoto) {
-        res.status(200).json(latestPhoto);
-    } else {
-        res.status(200).json({});
-    }
+    res.status(200).json({ recent: recentPhotos });
+});
+
+// --- NEW: POST endpoint to clear recent photos for a new session ---
+app.post('/api/clear-session', (req, res) => {
+    recentPhotos = [];
+    res.status(200).json({ success: true, message: 'Recent photos cleared for new session.' });
 });
 
 // --- UPDATED: POST endpoint for PREVIEWING a merged image (in-memory) ---
 app.post('/api/merge', async (req, res) => {
-    const { guestPhotoName, guestPhotoPath, templateName } = req.body;
-    const photoName = guestPhotoName || (guestPhotoPath ? path.basename(guestPhotoPath) : null);
+    const { guestPhotoNames, templateName } = req.body;
 
-    if (!photoName || !templateName) {
-        return res.status(400).json({ error: 'guestPhotoPath and templateName are required.' });
+    if (!guestPhotoNames || !Array.isArray(guestPhotoNames) || guestPhotoNames.length === 0 || !templateName) {
+        return res.status(400).json({ error: 'guestPhotoNames array and templateName are required.' });
     }
 
     // Retrieve the saved configuration for the template, with a fallback to the default
@@ -328,30 +335,45 @@ app.post('/api/merge', async (req, res) => {
         return res.status(404).json({ error: `No configuration found for template: ${templateName}. Please use Setup Mode first.` });
     }
 
-    const { x, y, width, height } = config;
+    // Normalize config to handle old single-area configs
+    let areas = config.areas;
+    if (!areas && config.x !== undefined) {
+        areas = [{ x: config.x, y: config.y, width: config.width, height: config.height }];
+    }
+
+    if (!areas || areas.length === 0) {
+         return res.status(400).json({ error: `Template configuration is invalid or missing selection areas.` });
+    }
+
     const templatePath = path.join(templatesFolder, templateName);
-    const resolvedGuestPhotoPath = path.join(cameraFolder, photoName);
 
     try {
-        if (!fs.existsSync(templatePath) || !fs.existsSync(resolvedGuestPhotoPath)) {
-            return res.status(404).json({ error: 'Guest photo or template not found for preview.' });
+        if (!fs.existsSync(templatePath)) {
+            return res.status(404).json({ error: 'Template not found for preview.' });
         }
 
-        console.log(`Generating merge preview for ${photoName}...`);
+        console.log(`Generating merge preview for ${guestPhotoNames.join(', ')}...`);
 
         const templateMetadata = await sharp(templatePath).metadata();
+        const compositeOperations = [];
+        const photosToMerge = guestPhotoNames.slice(0, areas.length);
 
-        // Smartly crop and resize the guest photo to fit the defined area
-        const guestPhotoBuffer = await sharp(resolvedGuestPhotoPath)
-            .resize({
-                width: Math.round(width), // Use saved config width
-                height: Math.round(height), // Use saved config height
-                fit: sharp.fit.cover, // Cover the area, cropping if necessary
-                position: sharp.strategy.attention // Focus on the most interesting part
-            })
-            .toBuffer();
+        for (let i = 0; i < photosToMerge.length; i++) {
+            const photoName = photosToMerge[i];
+            const area = areas[i];
+            const resolvedGuestPhotoPath = path.join(cameraFolder, photoName);
 
-        // Composite: White Background -> Guest Photo -> Template Overlay
+            if (fs.existsSync(resolvedGuestPhotoPath)) {
+                const guestPhotoBuffer = await sharp(resolvedGuestPhotoPath)
+                    .resize({ width: Math.round(area.width), height: Math.round(area.height), fit: sharp.fit.cover, position: sharp.strategy.attention })
+                    .toBuffer();
+                
+                compositeOperations.push({ input: guestPhotoBuffer, top: Math.round(area.y), left: Math.round(area.x) });
+            }
+        }
+
+        compositeOperations.push({ input: templatePath, top: 0, left: 0 });
+
         const outputBuffer = await sharp({
             create: {
                 width: templateMetadata.width,
@@ -360,10 +382,7 @@ app.post('/api/merge', async (req, res) => {
                 background: { r: 255, g: 255, b: 255, alpha: 1 }
             }
         })
-            .composite([
-                { input: guestPhotoBuffer, top: Math.round(y), left: Math.round(x) },
-                { input: templatePath, top: 0, left: 0 }
-            ])
+            .composite(compositeOperations)
             .jpeg()
             .toBuffer();
 
@@ -385,10 +404,10 @@ app.post('/api/merge', async (req, res) => {
 
 // --- UPDATED: POST endpoint for printing (saves and then prints) ---
 app.post('/api/print', async (req, res) => {
-    const { guestPhotoName, templateName, printerName } = req.body;
+    const { guestPhotoNames, templateName, printerName, copies = 1 } = req.body;
 
-    if (!guestPhotoName || !templateName) {
-        return res.status(400).json({ error: 'guestPhotoName and templateName are required.' });
+    if (!guestPhotoNames || !Array.isArray(guestPhotoNames) || guestPhotoNames.length === 0 || !templateName) {
+        return res.status(400).json({ error: 'guestPhotoNames array and templateName are required.' });
     }
 
     // Retrieve the saved configuration for the template, with a fallback to the default
@@ -402,29 +421,49 @@ app.post('/api/print', async (req, res) => {
         return res.status(404).json({ error: `No configuration found for template: ${templateName}.` });
     }
 
-    const { x, y, width, height } = config;
+    let areas = config.areas;
+    if (!areas && config.x !== undefined) {
+        areas = [{ x: config.x, y: config.y, width: config.width, height: config.height }];
+    }
+
+    if (!areas || areas.length === 0) {
+         return res.status(400).json({ error: `Template configuration is invalid or missing selection areas.` });
+    }
+
     const templatePath = path.join(templatesFolder, templateName);
-    const guestPhotoPath = path.join(cameraFolder, guestPhotoName);
-    const parsedGuestPhoto = path.parse(guestPhotoName);
+    const parsedGuestPhoto = path.parse(guestPhotoNames[0]);
     const outputPath = path.join(outputsFolder, `merged_${Date.now()}_${parsedGuestPhoto.name}.jpg`);
 
     try {
-        if (!fs.existsSync(templatePath) || !fs.existsSync(guestPhotoPath)) {
-            return res.status(404).json({ error: 'Guest photo or template not found for finalization.' });
+        if (!fs.existsSync(templatePath)) {
+            return res.status(404).json({ error: 'Template not found for finalization.' });
         }
 
-        // This logic is duplicated from the preview endpoint to ensure consistency
         const templateMetadata = await sharp(templatePath).metadata();
         const templateWidth = templateMetadata.width;
         const templateHeight = templateMetadata.height;
-        const resizeWidth = Math.round(Math.min(Number(width), templateWidth));
-        const resizeHeight = Math.round(Math.min(Number(height), templateHeight));
+        const compositeOperations = [];
+        const photosToMerge = guestPhotoNames.slice(0, areas.length);
 
-        const resizedGuestPhoto = await sharp(guestPhotoPath)
-            .resize({ width: resizeWidth, height: resizeHeight, fit: sharp.fit.cover, position: sharp.strategy.attention })
-            .toBuffer();
+        for (let i = 0; i < photosToMerge.length; i++) {
+            const photoName = photosToMerge[i];
+            const area = areas[i];
+            const guestPhotoPath = path.join(cameraFolder, photoName);
 
-        // Composite: White Background -> Guest Photo -> Template Overlay
+            if (fs.existsSync(guestPhotoPath)) {
+                const resizeWidth = Math.round(Math.min(Number(area.width), templateWidth));
+                const resizeHeight = Math.round(Math.min(Number(area.height), templateHeight));
+
+                const resizedGuestPhoto = await sharp(guestPhotoPath)
+                    .resize({ width: resizeWidth, height: resizeHeight, fit: sharp.fit.cover, position: sharp.strategy.attention })
+                    .toBuffer();
+                
+                compositeOperations.push({ input: resizedGuestPhoto, top: Math.round(area.y), left: Math.round(area.x) });
+            }
+        }
+
+        compositeOperations.push({ input: templatePath, top: 0, left: 0 });
+
         await sharp({
             create: {
                 width: templateWidth,
@@ -433,10 +472,7 @@ app.post('/api/print', async (req, res) => {
                 background: { r: 255, g: 255, b: 255, alpha: 1 }
             }
         })
-            .composite([
-                { input: resizedGuestPhoto, top: Math.round(y), left: Math.round(x) },
-                { input: templatePath, top: 0, left: 0 }
-            ])
+            .composite(compositeOperations)
             .jpeg()
             .toFile(outputPath);
 
@@ -447,13 +483,20 @@ app.post('/api/print', async (req, res) => {
             : `Start-Process -FilePath "${outputPath}" -Verb Print`;
 
         const fullCommand = `powershell.exe -Command "& {${printCommand}}"`;
-        exec(fullCommand, (error, stdout, stderr) => {
-            if (error) console.error(`Print command failed: ${error.message}`);
-            if (stderr) console.error(`Print command stderr: ${stderr}`);
-            if (!error) console.log(`🖨️ Print command sent for ${outputPath}.`);
-        });
+        
+        const numCopies = parseInt(copies, 10);
+        for(let i=0; i<numCopies; i++) {
+             exec(fullCommand, (error, stdout, stderr) => {
+                 if (error) console.error(`Print command failed (copy ${i+1}): ${error.message}`);
+                 if (stderr) console.error(`Print command stderr: ${stderr}`);
+                 if (!error) console.log(`🖨️ Print command sent for ${outputPath} (Copy ${i+1} of ${numCopies}).`);
+             });
+             if (i < numCopies - 1) {
+                 await new Promise(resolve => setTimeout(resolve, 1000));
+             }
+        }
 
-        res.status(200).json({ success: true, message: `Image saved to outputs and print command sent.` });
+        res.status(200).json({ success: true, message: `Image saved to outputs and ${numCopies} print command(s) sent.` });
     } catch (error) {
         console.error('--- IMAGE FINALIZE ERROR ---', error);
         console.error(error);

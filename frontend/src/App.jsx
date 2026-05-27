@@ -10,8 +10,11 @@ function App() {
   const [showInstructions, setShowInstructions] = useState(false);
 
   // Live Booth Mode State
-  const [currentPhoto, setCurrentPhoto] = useState(null);
-  const [mergedPhoto, setMergedPhoto] = useState(null); // Merged photo for final preview { url, originalPath, templateName }
+  const [recentPhotos, setRecentPhotos] = useState([]);
+  const [selectedPhotos, setSelectedPhotos] = useState([]);
+  const [mergedPhoto, setMergedPhoto] = useState(null); // { url, originalNames, templateName }
+  const [highlightedPhoto, setHighlightedPhoto] = useState(null); // To view a single photo clearly
+  const [liveTemplateBoxes, setLiveTemplateBoxes] = useState([]); // To preview layout in live mode
   const [printers, setPrinters] = useState([]);
   const [selectedPrinter, setSelectedPrinter] = useState('');
   const [templates, setTemplates] = useState([]);
@@ -26,7 +29,8 @@ function App() {
 
   // Template Setup Mode State
   const [selectedTemplateForEditing, setSelectedTemplateForEditing] = useState(null);
-  const [selectionBox, setSelectionBox] = useState({ x: 0, y: 0, width: 0, height: 0 });
+  const [selectionBoxes, setSelectionBoxes] = useState([]);
+  const [currentBox, setCurrentBox] = useState(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [startPoint, setStartPoint] = useState({ x: 0, y: 0 });
   const templateImageRef = useRef(null);
@@ -74,22 +78,19 @@ function App() {
       return `${BACKEND_URL}/${type}s/${name}`;
     };
 
-    const handleNewPhoto = (photo) => {
-      console.log('New photo received:', photo);
-      const photoUrl = getAssetUrl('photo', photo.name);
-      setCurrentPhoto({ name: photo.name, url: photoUrl, path: photo.path });
-      setMergedPhoto(null); // Clear any previous merged photo
-    };
-
     // Poll for new photos
     const pollNewPhoto = async () => {
       try {
         const res = await fetch(`${BACKEND_URL}/api/latest-photo`);
         if (res.ok) {
-          const photo = await res.json();
-          if (photo && photo.name && photo.name !== lastPhotoNameRef.current) {
-            lastPhotoNameRef.current = photo.name;
-            handleNewPhoto(photo);
+          const data = await res.json();
+          if (data.recent && Array.isArray(data.recent) && data.recent.length > 0) {
+             const latestName = data.recent[0].name;
+             if (latestName !== lastPhotoNameRef.current) {
+                 lastPhotoNameRef.current = latestName;
+                 setRecentPhotos(data.recent);
+                 setHighlightedPhoto(latestName);
+             }
           }
         }
       } catch (error) {
@@ -109,16 +110,32 @@ function App() {
     return `${BACKEND_URL}/${type}s/${name}`;
   };
 
+  // Number of areas for active template
+  const activeTemplateConfig = appConfig[activeTemplate] || {};
+  const requiredPhotos = activeTemplateConfig.areas ? activeTemplateConfig.areas.length : (activeTemplateConfig.x ? 1 : 1);
+
+  const togglePhotoSelection = (photoName) => {
+     if (selectedPhotos.includes(photoName)) {
+        setSelectedPhotos(selectedPhotos.filter(p => p !== photoName));
+     } else {
+        if (selectedPhotos.length < requiredPhotos) {
+           setSelectedPhotos([...selectedPhotos, photoName]);
+        } else {
+           alert(`This template requires exactly ${requiredPhotos} photo(s).`);
+        }
+     }
+  };
+
   // --- Live Booth Mode Handlers ---
   const handleApproveAndPreview = async () => {
-    if (!currentPhoto || isProcessing) return;
+    if (selectedPhotos.length !== requiredPhotos || isProcessing) return;
     setIsProcessing(true);
     try {
       const res = await fetch(`${BACKEND_URL}/api/merge`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          guestPhotoPath: currentPhoto.path,
+          guestPhotoNames: selectedPhotos,
           templateName: activeTemplate,
         }),
       });
@@ -131,12 +148,11 @@ function App() {
       const data = await res.json();
 
       setMergedPhoto({
-        url: data.outputUrl, // This is the output URL sent from backend
-        originalPath: currentPhoto.path, // Store original path for finalization
-        templateName: activeTemplate, // Store template name for finalization
-        originalName: currentPhoto.name
+        url: data.outputUrl,
+        originalNames: selectedPhotos,
+        templateName: activeTemplate,
       });
-      setCurrentPhoto(null);
+      setSelectedPhotos([]);
       setTimeout(() => {
         alert('Photo approved! Review the final card before saving or printing.');
       }, 0); // Allow UI to update before showing alert
@@ -149,23 +165,47 @@ function App() {
     }
   };
 
-  const handleReject = () => {
+  const handleReject = async () => {
     if (isProcessing) return;
-    setCurrentPhoto(null);
+    await resetSession();
+  };
+
+  const handleClearSelection = () => {
+    if (isProcessing) return;
+    setSelectedPhotos([]);
+  };
+
+  const resetSession = async () => {
+    try {
+      await fetch(`${BACKEND_URL}/api/clear-session`, { method: 'POST' });
+    } catch (error) {
+      console.error("Failed to clear session:", error);
+    }
+    setRecentPhotos([]);
+    setSelectedPhotos([]);
+    setHighlightedPhoto(null);
     setMergedPhoto(null);
-    alert('Action cancelled. Waiting for a new photo.');
+    lastPhotoNameRef.current = null;
   };
 
   const handlePrint = async () => {
     if (!mergedPhoto || isProcessing) return;
+    
+    const copiesStr = prompt("How many copies would you like to print?", "1");
+    if (copiesStr === null) return;
+    const copies = parseInt(copiesStr, 10);
+    if (isNaN(copies) || copies < 1) {
+        alert("Invalid number of copies.");
+        return;
+    }
+
     setIsProcessing(true);
 
-    // This config object is sent to the backend to save the file and then print it.
     const printConfig = {
-      guestPhotoName: mergedPhoto.originalName,
-      guestPhotoPath: mergedPhoto.originalPath,
+      guestPhotoNames: mergedPhoto.originalNames,
       templateName: mergedPhoto.templateName,
       printerName: selectedPrinter,
+      copies: copies
     };
 
     try {
@@ -180,9 +220,9 @@ function App() {
         throw new Error(errData.error || 'Failed to print image');
       }
 
-      setMergedPhoto(null); // Reset the view
+      await resetSession(); // Reset the view and clear photos
       setTimeout(() => {
-        alert('Print command sent! The image is also saved in the "outputs" folder.');
+        alert(`Print command sent for ${copies} copy(ies)! Ready for new images.`);
       }, 0); // Allow UI to update before showing alert
     } catch (error) {
       const errorMessage = error.message || 'An unknown error occurred.';
@@ -193,7 +233,7 @@ function App() {
     }
   };
 
-  const handleDownload = () => {
+  const handleDownload = async () => {
     if (!mergedPhoto) return;
 
     // Create a link element in memory
@@ -207,9 +247,9 @@ function App() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    setMergedPhoto(null); // Reset the view to wait for the next photo
+    await resetSession(); // Reset the view and clear photos
     setTimeout(() => {
-      alert('Image saved! Waiting for the next photo.');
+      alert('Image saved! Ready for new images.');
     }, 0); // Allow UI to update before showing alert
   };
 
@@ -224,10 +264,14 @@ function App() {
 
   const handleMouseDown = (e) => {
     if (mode !== 'setup') return;
+    if (selectionBoxes.length >= 4) {
+      alert("Maximum of 4 selection areas allowed.");
+      return;
+    }
     setIsDrawing(true);
     const point = getCoords(e);
     setStartPoint(point);
-    setSelectionBox({ x: point.x, y: point.y, width: 0, height: 0 });
+    setCurrentBox({ x: point.x, y: point.y, width: 0, height: 0 });
   };
 
   const handleMouseMove = (e) => {
@@ -239,33 +283,70 @@ function App() {
       width: Math.abs(currentPoint.x - startPoint.x),
       height: Math.abs(currentPoint.y - startPoint.y),
     };
-    setSelectionBox(newBox);
+    setCurrentBox(newBox);
   };
 
   const handleMouseUp = () => {
-    if (mode !== 'setup') return;
+    if (mode !== 'setup' || !isDrawing) return;
     setIsDrawing(false);
+    if (currentBox && currentBox.width > 10 && currentBox.height > 10) {
+      setSelectionBoxes([...selectionBoxes, currentBox]);
+    }
+    setCurrentBox(null);
+  };
+
+  const handleClearBoxes = () => {
+    setSelectionBoxes([]);
+  };
+
+  const handleSelectTemplateForEditing = (template) => {
+    setSelectedTemplateForEditing(template);
+    setSelectionBoxes([]);
+  };
+
+  const handleTemplateImageLoad = (e) => {
+    const img = e.target;
+    const config = appConfig[selectedTemplateForEditing];
+    
+    if (config) {
+      let areas = config.areas;
+      if (!areas && config.x !== undefined) {
+        areas = [{ x: config.x, y: config.y, width: config.width, height: config.height }];
+      }
+      
+      if (areas && areas.length > 0) {
+        const scaleX = img.clientWidth / img.naturalWidth;
+        const scaleY = img.clientHeight / img.naturalHeight;
+        const loadedBoxes = areas.map(area => ({
+          x: area.x * scaleX,
+          y: area.y * scaleY,
+          width: area.width * scaleX,
+          height: area.height * scaleY,
+        }));
+        setSelectionBoxes(loadedBoxes);
+      }
+    }
   };
 
   const handleSaveConfig = async () => {
-    if (selectionBox.width === 0 || selectionBox.height === 0) {
-      alert("Please draw a selection box on the template first.");
+    if (selectionBoxes.length === 0) {
+      alert("Please draw at least one selection box on the template.");
       return;
     }
     const img = templateImageRef.current;
     const scaleX = img.naturalWidth / img.clientWidth;
     const scaleY = img.naturalHeight / img.clientHeight;
 
-    const realCoords = {
-      x: selectionBox.x * scaleX,
-      y: selectionBox.y * scaleY,
-      width: selectionBox.width * scaleX,
-      height: selectionBox.height * scaleY,
-    };
+    const realCoordsArray = selectionBoxes.map(box => ({
+      x: box.x * scaleX,
+      y: box.y * scaleY,
+      width: box.width * scaleX,
+      height: box.height * scaleY,
+    }));
 
     try {
       const newConfig = { ...appConfig };
-      newConfig[selectedTemplateForEditing] = realCoords;
+      newConfig[selectedTemplateForEditing] = { areas: realCoordsArray };
 
       const res = await fetch(`${BACKEND_URL}/api/config`, {
         method: 'POST',
@@ -280,7 +361,7 @@ function App() {
       setAppConfig(newConfig);
 
       setSelectedTemplateForEditing(null); // Go back to the template list
-      setSelectionBox({ x: 0, y: 0, width: 0, height: 0 }); // Reset selection
+      setSelectionBoxes([]); // Reset selection
       setTimeout(() => {
         alert(`Configuration saved for ${selectedTemplateForEditing}!`);
       }, 0); // Allow UI to update before showing alert
@@ -427,6 +508,23 @@ function App() {
   // --- Main Render ---
   return (
     <div className="dashboard">
+      <style>{`
+        .recent-photos-row { display: flex; flex-wrap: nowrap; overflow-x: auto; gap: 10px; padding: 10px 0; justify-content: flex-start; }
+        .photo-thumbnail { flex: 0 0 auto; position: relative; cursor: pointer; border: 3px solid transparent; width: 100px; height: auto; border-radius: 8px; overflow: hidden; opacity: 0.6; transition: all 0.2s ease; }
+        .photo-thumbnail:hover { opacity: 0.8; }
+        .photo-thumbnail.active-highlight { opacity: 1; box-shadow: 0 0 0 3px #e1a9b8; }
+        .photo-thumbnail.selected { opacity: 1; border-color: #4CAF50; }
+        .photo-thumbnail img { width: 100%; height: auto; display: block; }
+        .photo-thumbnail .badge { position: absolute; top: 5px; right: 5px; background: #4CAF50; color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 12px; box-shadow: 0 2px 4px rgba(0,0,0,0.3); }
+        .selection-box { position: absolute; border: 2px dashed #ff0000; background: rgba(255, 0, 0, 0.2); pointer-events: none; }
+        .selection-box .box-index { position: absolute; top: 0; left: 0; background: red; color: white; padding: 2px 6px; font-size: 14px; font-weight: bold; }
+        .highlighted-photo-container { margin-top: 15px; background: #1a1a1a; border: 2px solid #444; border-radius: 8px; padding: 15px; display: flex; justify-content: center; align-items: center; min-height: 400px; }
+        .highlighted-photo-wrapper { position: relative; display: flex; flex-direction: column; align-items: center; gap: 15px; width: 100%; }
+        .highlighted-img { max-height: 50vh; max-width: 100%; border-radius: 4px; object-fit: contain; }
+        .large-badge { position: absolute; top: 10px; right: 10px; background: #4CAF50; color: white; border-radius: 50%; width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 20px; box-shadow: 0 4px 8px rgba(0,0,0,0.5); z-index: 2; }
+        .highlighted-actions { display: flex; gap: 10px; }
+        .photo-instructions { margin-top: 10px; font-weight: bold; color: #555; }
+      `}</style>
       <header className="header">
         <h1>Photo Booth Dashboard</h1>
         <div className="help-icon" onClick={() => setShowInstructions(true)} title="Show Instructions">
@@ -473,29 +571,102 @@ function App() {
           // --- Initial Photo Approval Step ---
           <main className="main-content">
             <div className="preview-container">
-              <h2>Live Preview</h2>
-              {currentPhoto ? (
-                <div className="photo-review">
-                  <img src={currentPhoto.url} alt="Live from booth" />
+              <h2>Live Photos</h2>
+              <div className="photo-instructions">
+                  {requiredPhotos > 1 ? `Select ${requiredPhotos} photos in order for the current template.` : 'Select 1 photo for the current template.'}
+              </div>
+
+              <div className="highlighted-photo-container">
+                {highlightedPhoto ? (
+                    <div className="highlighted-photo-wrapper">
+                        <img src={getAssetUrl('photo', highlightedPhoto)} alt="Highlighted" className="highlighted-img" />
+                        {selectedPhotos.includes(highlightedPhoto) && (
+                            <div className="large-badge">{selectedPhotos.indexOf(highlightedPhoto) + 1}</div>
+                        )}
+                        <div className="highlighted-actions">
+                            <button
+                                className={selectedPhotos.includes(highlightedPhoto) ? 'reject-btn' : 'approve-btn'}
+                                onClick={() => togglePhotoSelection(highlightedPhoto)}
+                                disabled={!selectedPhotos.includes(highlightedPhoto) && selectedPhotos.length >= requiredPhotos}
+                            >
+                                {selectedPhotos.includes(highlightedPhoto) ? '❌ Deselect Photo' : '✅ Select Photo'}
+                            </button>
+                        </div>
+                    </div>
+                ) : (
+                    <div className="no-photo"><p>Waiting for new photos...</p></div>
+                )}
+              </div>
+
+              {recentPhotos.length > 0 && (
+                <div className="recent-photos-row">
+                  {recentPhotos.slice(0, 6).map(photo => {
+                    const index = selectedPhotos.indexOf(photo.name);
+                    const isSelected = index !== -1;
+                    return (
+                        <div
+                            key={photo.name}
+                            className={`photo-thumbnail ${isSelected ? 'selected' : ''} ${highlightedPhoto === photo.name ? 'active-highlight' : ''}`}
+                            onClick={() => setHighlightedPhoto(photo.name)}
+                        >
+                            <img src={getAssetUrl('photo', photo.name)} alt={photo.name} />
+                            {isSelected && <div className="badge">{index + 1}</div>}
+                        </div>
+                    );
+                  })}
                 </div>
-              ) : (
-                <div className="no-photo"><p>Waiting for a new photo...</p></div>
               )}
             </div>
             <div className="controls-container">
               <h2>Controls</h2>
               <div className="control-group">
                 <label htmlFor="template-select">Active Template:</label>
-                <select id="template-select" value={activeTemplate} onChange={(e) => setActiveTemplate(e.target.value)} disabled={templates.length === 0 || isProcessing}>
+                <select id="template-select" value={activeTemplate} onChange={(e) => { setActiveTemplate(e.target.value); setSelectedPhotos([]); setLiveTemplateBoxes([]); }} disabled={templates.length === 0 || isProcessing}>
                   {templates.length > 0 ? templates.map(t => <option key={t} value={t}>{t}</option>) : <option>No templates found</option>}
                 </select>
               </div>
+
+              {activeTemplate && (
+                <div className="live-template-preview" style={{ marginTop: '15px', textAlign: 'center' }}>
+                  <p style={{fontSize: '0.9rem', marginBottom: '10px', fontWeight: 'bold'}}>Template Layout (Photo Order):</p>
+                  <div style={{ position: 'relative', width: '100%', maxWidth: '200px', margin: '0 auto' }}>
+                    <img 
+                      src={getAssetUrl('template', activeTemplate)} 
+                      alt="Layout Preview"
+                      style={{ width: '100%', height: 'auto', display: 'block', border: '1px solid #ddd', borderRadius: '4px' }}
+                      onLoad={(e) => {
+                         const img = e.target;
+                         const config = appConfig[activeTemplate];
+                         if (config) {
+                           let areas = config.areas || (config.x !== undefined ? [config] : []);
+                           const naturalW = img.naturalWidth;
+                           const naturalH = img.naturalHeight;
+                           setLiveTemplateBoxes(areas.map(area => ({
+                              left: `${(area.x / naturalW) * 100}%`,
+                              top: `${(area.y / naturalH) * 100}%`,
+                              width: `${(area.width / naturalW) * 100}%`,
+                              height: `${(area.height / naturalH) * 100}%`
+                           })));
+                         }
+                      }}
+                    />
+                    {liveTemplateBoxes.map((box, idx) => (
+                      <div key={idx} style={{ position: 'absolute', border: '2px solid #4CAF50', background: 'rgba(76, 175, 80, 0.4)', left: box.left, top: box.top, width: box.width, height: box.height, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold', fontSize: '1.2rem', textShadow: '1px 1px 2px black' }}>
+                        {idx + 1}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               <div className="actions">
-                <button onClick={handleApproveAndPreview} disabled={!currentPhoto || isProcessing} className="approve-btn">
-                  {isProcessing ? 'Processing...' : '✅ Approve & Preview Card'}
-                </button>
-                <button onClick={handleReject} disabled={!currentPhoto || isProcessing} className="reject-btn">
-                  ❌ Reject Photo
+                {selectedPhotos.length === requiredPhotos && (
+                  <button onClick={handleApproveAndPreview} disabled={isProcessing} className="approve-btn">
+                    {isProcessing ? 'Processing...' : '✅ Approve & Preview Card'}
+                  </button>
+                )}
+                <button onClick={handleClearSelection} disabled={selectedPhotos.length === 0 || isProcessing} className="reject-btn">
+                  ❌ Clear Selection
                 </button>
               </div>
             </div>
@@ -508,19 +679,36 @@ function App() {
             {selectedTemplateForEditing ? (
               <>
                 <h2>Editing: {selectedTemplateForEditing}</h2>
-                <p>Draw a rectangle on the template where the guest's photo should appear.</p>
+                <p>Draw up to 4 rectangles on the template where the guest's photos should appear (in order).</p>
                 <div className="template-editor" onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp}>
-                  <img ref={templateImageRef} src={getAssetUrl('template', selectedTemplateForEditing)} alt="Template for setup" />
-                  {selectionBox.width > 0 && (
+                  <img 
+                    ref={templateImageRef} 
+                    src={getAssetUrl('template', selectedTemplateForEditing)} 
+                    alt="Template for setup" 
+                    draggable="false"
+                    onLoad={handleTemplateImageLoad}
+                  />
+                  {selectionBoxes.map((box, idx) => (
+                    <div key={idx} className="selection-box" style={{
+                      left: `${box.x}px`,
+                      top: `${box.y}px`,
+                      width: `${box.width}px`,
+                      height: `${box.height}px`,
+                    }}>
+                       <div className="box-index">{idx + 1}</div>
+                    </div>
+                  ))}
+                  {currentBox && currentBox.width > 0 && (
                     <div className="selection-box" style={{
-                      left: `${selectionBox.x}px`,
-                      top: `${selectionBox.y}px`,
-                      width: `${selectionBox.width}px`,
-                      height: `${selectionBox.height}px`,
+                      left: `${currentBox.x}px`,
+                      top: `${currentBox.y}px`,
+                      width: `${currentBox.width}px`,
+                      height: `${currentBox.height}px`,
                     }} />
                   )}
                 </div>
                 <div className="actions">
+                  <button onClick={handleClearBoxes} className="reject-btn" type="button">Clear Areas</button>
                   <button onClick={handleSaveConfig} className="save-config-btn">💾 Save Configuration</button>
                   <button onClick={() => setSelectedTemplateForEditing(null)} className="reject-btn">Back to List</button>
                 </div>
@@ -559,7 +747,7 @@ function App() {
                         src={getAssetUrl('template', template)}
                         alt={template}
                         className="template-thumbnail"
-                        onClick={() => setSelectedTemplateForEditing(template)}
+                        onClick={() => handleSelectTemplateForEditing(template)}
                       />
                       <button
                         className="delete-template-btn"
