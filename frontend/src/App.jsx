@@ -94,7 +94,7 @@ function App() {
     // Poll for new photos
     const pollNewPhoto = async () => {
       try {
-        const res = await fetch(`${BACKEND_URL}/api/latest-photo`);
+        const res = await fetch(`${BACKEND_URL}/api/latest-photo?_t=${Date.now()}`, { cache: 'no-store' });
         if (res.ok) {
           const data = await res.json();
           if (data.lastUpdate !== lastUpdateRef.current) {
@@ -150,7 +150,7 @@ function App() {
         dragRef.current.isDragging = false;
     };
 
-    if (isPreviewMode) {
+    if (mode === 'live') {
         window.addEventListener('mousemove', handleMouseMove);
         window.addEventListener('mouseup', handleMouseUp);
         window.addEventListener('touchmove', handleMouseMove, { passive: false });
@@ -162,7 +162,7 @@ function App() {
         window.removeEventListener('touchmove', handleMouseMove);
         window.removeEventListener('touchend', handleMouseUp);
     };
-  }, [isPreviewMode]);
+  }, [mode]);
 
   // Helper to get the correct asset URL based on environment
   const getAssetUrl = (type, item) => {
@@ -191,8 +191,6 @@ function App() {
   // --- Live Booth Mode Handlers ---
   const handleApproveAndPreview = () => {
     if (selectedPhotos.length !== requiredPhotos || isProcessing) return;
-    // Instantly transition to Interactive Preview Mode
-    setPhotoPositions(Array(requiredPhotos).fill({x: 50, y: 50}));
     setIsPreviewMode(true);
   };
 
@@ -204,11 +202,6 @@ function App() {
   const handleReject = async () => {
     if (isProcessing) return;
     await resetSession();
-  };
-
-  const handleClearSelection = () => {
-    if (isProcessing) return;
-    setSelectedPhotos([]);
   };
 
   const handleDeletePhoto = async (photoName, e) => {
@@ -371,8 +364,8 @@ function App() {
   const getCoords = (e) => {
     const rect = templateImageRef.current.getBoundingClientRect();
     return {
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top,
+      x: Math.max(0, Math.min(e.clientX - rect.left, rect.width)),
+      y: Math.max(0, Math.min(e.clientY - rect.top, rect.height)),
     };
   };
 
@@ -621,43 +614,184 @@ function App() {
     }
   };
 
+  // --- Dynamic Layout Calculation for Live Template Preview ---
+  useEffect(() => {
+    const updateBoxes = () => {
+      const img = document.getElementById('live-preview-img');
+      if (!img) return;
+      const config = appConfig[activeTemplate];
+      if (config) {
+        let areas = config.areas || (config.x !== undefined ? [config] : []);
+        const { naturalWidth, naturalHeight } = img;
+        if (!naturalWidth || !naturalHeight) return;
+        setLiveTemplateBoxes(areas.map(area => ({
+           left: `${(area.x / naturalWidth) * 100}%`,
+           top: `${(area.y / naturalHeight) * 100}%`,
+           width: `${(area.width / naturalWidth) * 100}%`,
+           height: `${(area.height / naturalHeight) * 100}%`
+        })));
+      } else {
+        setLiveTemplateBoxes([]);
+      }
+    };
+
+    updateBoxes();
+    const handleLoad = () => updateBoxes();
+    window.addEventListener('template-loaded', handleLoad);
+    return () => window.removeEventListener('template-loaded', handleLoad);
+  }, [activeTemplate, appConfig]);
+
   // --- Main Render ---
   return (
     <div className="dashboard">
       <style>{`
-        .recent-photos-row { display: flex; flex-wrap: nowrap; overflow-x: auto; gap: 15px; padding: 15px 5px; justify-content: flex-start; }
-        .recent-photos-row::-webkit-scrollbar { height: 8px; }
-        .recent-photos-row::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 4px; }
-        .photo-thumbnail { flex: 0 0 auto; position: relative; cursor: pointer; border: 2px solid transparent; width: 110px; height: auto; border-radius: 12px; overflow: hidden; opacity: 0.7; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); box-shadow: 0 4px 6px rgba(0,0,0,0.2); }
-        .photo-thumbnail:hover { opacity: 1; transform: translateY(-5px); box-shadow: 0 10px 15px rgba(0,0,0,0.4); }
-        .photo-thumbnail.active-highlight { opacity: 1; box-shadow: 0 0 0 3px #ff9a9e, 0 8px 15px rgba(255, 154, 158, 0.4); }
-        .photo-thumbnail.selected { opacity: 1; border-color: transparent; box-shadow: 0 0 0 3px #28a745, 0 8px 15px rgba(40, 167, 69, 0.4); }
-        .photo-thumbnail img { width: 100%; height: auto; display: block; }
-        .photo-thumbnail .badge { position: absolute; top: 6px; right: 6px; background: #28a745; color: white; border-radius: 50%; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 12px; box-shadow: 0 2px 5px rgba(0,0,0,0.4); }
+        /* --- Full Window Layout Styles --- */
+        html, body, #root { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }
+        .dashboard { display: flex; flex-direction: column; width: 100vw; height: 100vh; max-width: 1440px; margin: 0 auto; overflow: hidden; box-sizing: border-box; }
+        .header { flex-shrink: 0; padding: 10px 20px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); }
+        .header h1 { margin: 0; font-size: 1.5rem; }
+        .header-actions { display: flex; gap: 15px; align-items: center; }
+        .main-content { flex: 1; display: flex; flex-direction: row; gap: 20px; padding: 10px 20px 20px 20px; height: 100%; box-sizing: border-box; overflow: hidden; }
+        .main-content.setup-layout { flex-direction: column; overflow-y: auto; padding: 10px 20px; align-items: center; justify-content: flex-start; }
+        .preview-container { flex: 6.5; display: flex; flex-direction: column; background: var(--item-bg); border-radius: 12px; padding: 10px; overflow: hidden; box-shadow: 0 4px 10px rgba(0,0,0,0.2); }
+        .controls-container { flex: 3.5; display: flex; flex-direction: column; background: var(--item-bg); border-radius: 12px; padding: 8px 12px; overflow: hidden; box-shadow: 0 4px 10px rgba(0,0,0,0.2); position: relative; }
+        .controls-container .actions { flex-shrink: 0; margin-top: auto; padding-top: 10px; display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; } 
+
+        .live-selection-wrapper { display: flex; flex-direction: row; width: 100%; height: 100%; gap: 20px; min-height: 0; overflow: hidden; }
+        .recent-photos-column { flex: 0 0 120px; display: flex; flex-direction: column; overflow-y: auto; overflow-x: hidden; gap: 15px; padding: 5px; }
+        .recent-photos-column::-webkit-scrollbar { width: 6px; }
+        .recent-photos-column::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 4px; }
+        .photo-thumbnail { flex: 0 0 auto; position: relative; cursor: pointer; width: 100%; padding: 4px; box-sizing: border-box; background: transparent; border-radius: 8px; opacity: 0.6; transition: all 0.3s ease; }
+        .photo-thumbnail:hover { opacity: 1; transform: translateY(-3px); }
+        .photo-thumbnail.active-highlight { opacity: 1; background: rgba(255, 154, 158, 0.2); box-shadow: inset 0 0 0 2px #ff9a9e; }
+        .photo-thumbnail.selected { opacity: 1; background: rgba(40, 167, 69, 0.2); box-shadow: inset 0 0 0 2px #28a745; }
+        .photo-thumbnail img { width: 100%; height: auto; object-fit: contain; display: block; border-radius: 6px; box-shadow: 0 2px 5px rgba(0,0,0,0.3); }
+        .photo-thumbnail .badge { position: absolute; top: 5px; right: 5px; background: #28a745; color: white; border-radius: 50%; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 12px; box-shadow: 0 2px 5px rgba(0,0,0,0.4); z-index: 2; }
+
+        .no-photo { width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; color: var(--text-muted); font-size: 1.2rem; border: 2px dashed var(--border-color); border-radius: 12px; }
+
+        /* Template Editor in Setup Mode */
+        .setup-container.list-mode { width: 100%; max-width: 1200px; height: 98%; display: flex; flex-direction: column; gap: 15px; }
+        .setup-container.editing-mode { overflow: visible; gap: 15px; padding: 10px; width: 100%; max-width: 900px; height: auto; }
+        .setup-container.editing-mode h2 { margin: 0; font-size: 1.4rem; }
+        .setup-container.editing-mode p { margin: 0 0 5px 0; font-size: 0.9rem; color: var(--text-muted); }
+        .config-section {
+          display: flex;
+          flex-direction: column;
+          background: var(--item-bg);
+          border-radius: 12px;
+          padding: 15px 20px;
+          box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+        }
+        .config-section h2 {
+          margin-top: 0;
+          padding-bottom: 5px;
+          border-bottom: 1px solid var(--border-color);
+          margin-bottom: 10px;
+          text-align: left;
+          font-size: 1.2rem;
+        }
+        
+        /* New Vertical Stack Layout */
+        .config-section.system-config-card { flex: 1; display: flex; flex-direction: column; justify-content: center; }
+        .config-section.template-management-card { flex: 3; display: flex; flex-direction: column; overflow: hidden; }
+        
+        .system-config-card .control-group { flex-direction: row; align-items: center; gap: 15px; }
+        .system-config-card .control-group label { margin-bottom: 0; flex-shrink: 0; font-size: 0.9rem; }
+        .system-config-card .input-group { margin-top: 0; flex-grow: 1; }
+        
+        .template-management-card .template-gallery { flex: 1; display: flex; flex-wrap: wrap; align-content: flex-start; gap: 15px; overflow-y: auto; padding: 5px 5px 5px 0; }
+        .template-management-card .template-item { width: 120px; flex-shrink: 0; }
+        .template-management-card .upload-container {
+          margin-top: auto;
+          padding-top: 15px;
+          border-top: 1px solid var(--border-color);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 15px;
+        }
+        .template-management-card .upload-container h3 { font-size: 1rem; margin: 0; }
+
+        .template-editor {
+          position: relative;
+          display: block; /* Use block to allow scrolling */
+          text-align: center;
+          padding: 20px;
+          /* margin: 20px auto; Removed, relying on parent gap */
+          border: 1px solid var(--border-color);
+          border-radius: 8px;
+          overflow: hidden; 
+          background: var(--item-bg);
+          box-shadow: 0 4px 10px rgba(0,0,0,0.2);
+        }
+        .template-editor img {
+          max-width: 100%; 
+          height: auto; 
+          object-fit: contain; /* Scale down to fit without cropping */
+          display: block;
+          margin: 0 auto;
+        }
+
         .selection-box { position: absolute; border: 2px dashed #ff0000; background: rgba(255, 0, 0, 0.2); pointer-events: none; }
         .selection-box .box-index { position: absolute; top: 0; left: 0; background: red; color: white; padding: 2px 6px; font-size: 14px; font-weight: bold; }
-        .highlighted-photo-container { margin-top: 15px; background: var(--item-bg); border: 1px solid var(--border-color); box-shadow: inset 0 2px 10px rgba(0,0,0,0.1); border-radius: 12px; padding: 20px; display: flex; justify-content: center; align-items: center; min-height: 420px; }
-        .highlighted-photo-wrapper { position: relative; display: flex; flex-direction: column; align-items: center; gap: 15px; width: 100%; }
-        .highlighted-img { max-height: 50vh; max-width: 100%; border-radius: 8px; object-fit: contain; box-shadow: 0 5px 15px rgba(0,0,0,0.5); }
-        .large-badge { position: absolute; top: -10px; right: -10px; background: #28a745; color: white; border-radius: 50%; width: 45px; height: 45px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 22px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); z-index: 2; }
-        .highlighted-actions { display: flex; gap: 10px; }
-        .photo-instructions { margin-top: 10px; font-weight: 500; color: var(--text-muted); background: var(--input-bg); padding: 10px; border-radius: 8px; }
-        .delete-photo-btn { position: absolute; top: 6px; left: 6px; background: rgba(220, 53, 69, 0.9); color: white; border: none; border-radius: 50%; width: 24px; height: 24px; font-size: 16px; font-weight: bold; cursor: pointer; display: flex; align-items: center; justify-content: center; z-index: 5; padding: 0; line-height: 1; transition: all 0.2s; box-shadow: 0 2px 4px rgba(0,0,0,0.3); }
+        .highlighted-photo-container { background: transparent; border: none; padding: 0; display: flex; justify-content: center; align-items: center; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
+        .highlighted-photo-wrapper { position: relative; display: flex; width: 100%; height: 100%; justify-content: center; align-items: center; min-height: 0; overflow: hidden; }
+        .highlighted-img-container { width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; overflow: hidden; position: relative; }
+        .highlighted-img { max-height: 100%; max-width: 100%; width: auto; height: auto; border-radius: 8px; object-fit: contain; box-shadow: 0 8px 25px rgba(0,0,0,0.4); }
+        .large-badge { position: absolute; top: 15px; right: 15px; background: #28a745; color: white; border-radius: 50%; width: 45px; height: 45px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 22px; box-shadow: 0 4px 10px rgba(0,0,0,0.5); z-index: 2; }
+        .highlighted-actions { position: absolute; bottom: 20px; right: 20px; display: flex; flex-direction: row; gap: 15px; z-index: 10; }
+        .highlighted-actions button { width: 42px; height: 42px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; padding: 0; transition: transform 0.2s, box-shadow 0.2s; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+        .highlighted-actions button:hover:not(:disabled) { transform: scale(1.1); box-shadow: 0 6px 12px rgba(0,0,0,0.4); }
+        .delete-photo-btn { position: absolute; top: -5px; left: -5px; background: rgba(220, 53, 69, 0.9); color: white; border: none; border-radius: 50%; width: 22px; height: 22px; font-size: 14px; font-weight: bold; cursor: pointer; display: flex; align-items: center; justify-content: center; z-index: 5; padding: 0; line-height: 1; transition: all 0.2s; box-shadow: 0 2px 4px rgba(0,0,0,0.3); }
         .delete-photo-btn:hover { background: #dc3545; transform: scale(1.15) rotate(90deg); }
-        .back-arrow-btn { position: absolute; top: 20px; left: 20px; background: var(--input-bg); border: 1px solid var(--border-color); width: 45px; height: 45px; border-radius: 50%; display: flex; justify-content: center; align-items: center; font-size: 1.5rem; color: var(--accent-pink); cursor: pointer; padding: 0; transition: all 0.3s; z-index: 100; box-shadow: 0 4px 6px rgba(0,0,0,0.2); }
+        .back-arrow-btn { position: absolute; top: 20px; left: 20px; background: var(--input-bg); border: 1px solid var(--border-color); width: 36px; height: 36px; border-radius: 50%; display: flex; justify-content: center; align-items: center; font-size: 1.2rem; color: var(--accent-pink); cursor: pointer; padding: 0; transition: all 0.3s; z-index: 100; box-shadow: 0 4px 6px rgba(0,0,0,0.2); }
         .back-arrow-btn:hover { background: var(--accent-pink); color: #121212; transform: translateX(-5px); box-shadow: 0 6px 12px rgba(255, 154, 158, 0.3); }
+        .preview-container h2 { margin-top: 0; margin-bottom: 10px; font-size: 1.4rem; }
       `}</style>
+        
+        {/* --- NEW: Live Template Preview Styles --- */}
+        <style>{`
+          .live-template-preview {
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+            margin-top: 5px;
+          }
+          .live-template-preview-wrapper { flex: 1; min-height: 0; position: relative; display: flex; align-items: center; justify-content: center; }
+          .live-template-preview-img { display: block; object-fit: contain; max-width: 100%; max-height: 100%; border: 1px solid var(--border-color); border-radius: 4px; }
+          .live-template-box { position: absolute; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 1.2rem; text-shadow: 1px 1px 2px black; box-sizing: border-box; z-index: 5; }
+
+          .controls-container h2, .controls-container .control-group { flex-shrink: 0; }
+          .theme-toggle, .help-icon, .settings-icon {
+            position: static !important;
+            cursor: pointer;
+            font-size: 1.2rem;
+            width: 35px;
+            height: 35px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            transition: background-color 0.3s;
+            user-select: none;
+          }
+          .theme-toggle:hover, .help-icon:hover, .settings-icon:hover { background-color: var(--border-color); }
+        `}</style>
+
       <header className="header">
         <h1>Photo Booth Dashboard</h1>
-        <div className="theme-toggle" onClick={() => setIsDarkMode(!isDarkMode)} title={isDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}>
-          {isDarkMode ? '☀️' : '🌙'}
-        </div>
-        <div className="help-icon" onClick={() => setShowInstructions(true)} title="Show Instructions">
-          ?
-        </div>
-        <div className="mode-switcher">
-          <button onClick={() => setMode('live')} className={mode === 'live' ? 'active' : ''}>Live Booth</button>
-          <button onClick={() => setMode('setup')} className={mode === 'setup' ? 'active' : ''}>Settings</button>
+        <div className="header-actions">
+          <div className="theme-toggle" onClick={() => setIsDarkMode(!isDarkMode)} title={isDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}>
+            {isDarkMode ? '☀️' : '🌙'}
+          </div>
+          <div className="help-icon" onClick={() => setShowInstructions(true)} title="Show Instructions">
+            ❓
+          </div>
+          <div className="settings-icon" onClick={() => setMode(prev => prev === 'live' ? 'setup' : 'live')} title={mode === 'live' ? 'Go to Settings' : 'Back to Live Booth'}>
+            {mode === 'live' ? '⚙️' : '🖥️'}
+          </div>
         </div>
       </header>
 
@@ -666,13 +800,14 @@ function App() {
           // --- Final Preview and Action Step ---
           <main className="main-content">
             <div className="preview-container" ref={previewContainerRef}>
-              <h2>Final Preview (Drag photos to adjust)</h2>
-              <div className="photo-review" style={{ position: 'relative', display: 'inline-block', maxWidth: '100%', overflow: 'hidden', borderRadius: '8px' }}>
+              <h2 style={{ textAlign: 'center', marginBottom: '10px' }}>Final Preview (Drag photos to adjust)</h2>
+              <div className="photo-review-wrapper" style={{ flex: 1, display: 'flex', justifyContent: 'center', alignItems: 'center', overflow: 'hidden', minHeight: 0, padding: '10px' }}>
+                <div className="photo-review" style={{ position: 'relative', display: 'inline-block', maxWidth: '100%', maxHeight: '100%', borderRadius: '8px' }}>
                 <img 
                   src={getAssetUrl('template', activeTemplate)} 
                   alt="Final merged card"
                   className="template-bg"
-                  style={{ width: '100%', height: 'auto', display: 'block', position: 'relative', zIndex: 10, pointerEvents: 'none' }}
+                  style={{ maxWidth: '100%', maxHeight: 'calc(100vh - 220px)', width: 'auto', height: 'auto', display: 'block', position: 'relative', zIndex: 10, pointerEvents: 'none' }}
                   onLoad={(e) => {
                      const img = e.target;
                      setTemplateScale(img.clientWidth / img.naturalWidth);
@@ -715,19 +850,22 @@ function App() {
                      );
                    });
                 })()}
+                </div>
               </div>
             </div>
-            <div className="controls-container" style={{ position: 'relative' }}>
+            <div className="controls-container" style={{ position: 'relative', display: 'flex', flexDirection: 'column', padding: '25px 20px' }}>
               <button onClick={handleBackToSelection} disabled={isProcessing} className="back-arrow-btn" title="Back to Selection">⬅</button>
-              <h2>Finalize</h2>
-              <div className="control-group">
-                <label htmlFor="printer-select">Select Printer:</label>
-                <select id="printer-select" value={selectedPrinter} onChange={(e) => setSelectedPrinter(e.target.value)} disabled={printers.length === 0 || isProcessing}>
+              <h2 style={{ textAlign: 'center', marginBottom: '5px' }}>Finalize</h2>
+              
+              <div className="control-group" style={{ alignItems: 'stretch', marginBottom: '5px' }}>
+                <label htmlFor="printer-select" style={{ fontSize: '0.95rem', marginBottom: '0' }}>Select Printer:</label>
+                <select id="printer-select" value={selectedPrinter} onChange={(e) => setSelectedPrinter(e.target.value)} disabled={printers.length === 0 || isProcessing} style={{ padding: '0.4em 0.8em' }}>
                   {printers.length > 0 ? printers.map(p => <option key={p} value={p}>{p}</option>) : <option>No printers found</option>}
                 </select>
               </div>
-              <div className="control-group" style={{ flexDirection: 'row', gap: '10px' }}>
-                <label htmlFor="print-copies" style={{ fontSize: '1.1em' }}>Copies:</label>
+              
+              <div className="control-group" style={{ flexDirection: 'row', gap: '15px', alignItems: 'center', marginTop: '5px', marginBottom: '5px' }}>
+                <label htmlFor="print-copies" style={{ fontSize: '0.95rem', whiteSpace: 'nowrap' }}>Copies:</label>
                 <input
                   id="print-copies"
                   type="number"
@@ -736,11 +874,15 @@ function App() {
                   value={printCopies}
                   onChange={(e) => setPrintCopies(Math.max(1, parseInt(e.target.value, 10) || 1))}
                   disabled={isProcessing}
-                  style={{ width: '70px', padding: '0.4em', borderRadius: '4px', border: '1px solid var(--border-color)', backgroundColor: 'var(--input-bg)', color: 'var(--text-main)', textAlign: 'center', fontSize: '1.1em' }}
+                  style={{ width: '60px', padding: '0.4em', borderRadius: '4px', border: '1px solid var(--border-color)', backgroundColor: 'var(--input-bg)', color: 'var(--text-main)', textAlign: 'center', fontSize: '0.95rem' }}
                 />
+                <button onClick={handlePrint} disabled={isProcessing} className="approve-btn" style={{ flex: 1, padding: '0.5em', fontSize: '0.95rem' }}>
+                  {isProcessing ? 'Printing...' : '🖨️ Print Now'}
+                </button>
               </div>
-              <div className="control-group" style={{ flexDirection: 'row', gap: '10px' }}>
-                <label htmlFor="email-input" style={{ fontSize: '1.1em' }}>Email:</label>
+
+              <div className="control-group" style={{ flexDirection: 'row', gap: '15px', alignItems: 'center', marginTop: '5px', marginBottom: '5px' }}>
+                <label htmlFor="email-input" style={{ fontSize: '0.95rem', whiteSpace: 'nowrap' }}>Email:</label>
                 <input
                   id="email-input"
                   type="email"
@@ -748,20 +890,18 @@ function App() {
                   value={emailAddress}
                   onChange={(e) => setEmailAddress(e.target.value)}
                   disabled={isProcessing}
-                  style={{ width: '200px', padding: '0.4em', borderRadius: '4px', border: '1px solid var(--border-color)', backgroundColor: 'var(--input-bg)', color: 'var(--text-main)', fontSize: '1.1em' }}
+                  style={{ flex: 1, padding: '0.4em', borderRadius: '4px', border: '1px solid var(--border-color)', backgroundColor: 'var(--input-bg)', color: 'var(--text-main)', fontSize: '0.95rem', minWidth: 0 }}
                 />
-              </div>
-              <div className="actions">
-                <button onClick={handlePrint} disabled={isProcessing} className="approve-btn">
-                  {isProcessing ? 'Printing...' : '🖨️ Print Now'}
-                </button>
-                <button onClick={handleEmail} disabled={isProcessing || !emailAddress} className="approve-btn" style={{ backgroundColor: '#007bff', borderColor: '#0056b3' }}>
+                <button onClick={handleEmail} disabled={isProcessing || !emailAddress} className="approve-btn" style={{ padding: '0.5em 1em', fontSize: '0.95rem', whiteSpace: 'nowrap' }}>
                   {isProcessing ? 'Sending...' : '✉️ Send Email'}
                 </button>
-                <button onClick={handleDownload} disabled={isProcessing} className="download-btn">
+              </div>
+
+              <div className="actions" style={{ marginTop: 'auto', paddingTop: '10px', display: 'flex', justifyContent: 'center', gap: '20px', flexWrap: 'nowrap' }}>
+                <button onClick={handleDownload} disabled={isProcessing} className="download-btn" style={{ padding: '0.6em 1.2em', fontSize: '1rem', flex: 1 }}>
                   💾 Save as JPG...
                 </button>
-                <button onClick={handleReject} disabled={isProcessing} className="reject-btn">
+                <button onClick={handleReject} disabled={isProcessing} className="reject-btn" style={{ padding: '0.6em 1.2em', fontSize: '1rem', flex: 1 }}>
                   ❌ Reject
                 </button>
               </div>
@@ -771,43 +911,9 @@ function App() {
           // --- Initial Photo Approval Step ---
           <main className="main-content">
             <div className="preview-container">
-              <h2>Live Photos</h2>
-              <div className="photo-instructions">
-                  {requiredPhotos > 1 ? `Select ${requiredPhotos} photos in order for the current template.` : 'Select 1 photo for the current template.'}
-              </div>
-
-              <div className="highlighted-photo-container">
-                {highlightedPhoto ? (
-                    <div className="highlighted-photo-wrapper">
-                        <img src={getAssetUrl('photo', recentPhotos.find(p => p.name === highlightedPhoto) || highlightedPhoto)} alt="Highlighted" className="highlighted-img" />
-                        {selectedPhotos.includes(highlightedPhoto) && (
-                            <div className="large-badge">{selectedPhotos.indexOf(highlightedPhoto) + 1}</div>
-                        )}
-                        <div className="highlighted-actions">
-                            <button
-                                className={selectedPhotos.includes(highlightedPhoto) ? 'reject-btn' : 'approve-btn'}
-                                onClick={() => togglePhotoSelection(highlightedPhoto)}
-                                disabled={!selectedPhotos.includes(highlightedPhoto) && selectedPhotos.length >= requiredPhotos}
-                            >
-                                {selectedPhotos.includes(highlightedPhoto) ? '❌ Deselect Photo' : '✅ Select Photo'}
-                            </button>
-                            <button
-                                className="reject-btn"
-                                onClick={(e) => handleDeletePhoto(highlightedPhoto, e)}
-                                disabled={isProcessing}
-                            >
-                                🗑️ Delete
-                            </button>
-                        </div>
-                    </div>
-                ) : (
-                    <div className="no-photo"><p>Waiting for new photos...</p></div>
-                )}
-              </div>
-
-              {recentPhotos.length > 0 && (
-                <div className="recent-photos-row">
-                  {recentPhotos.slice(0, 6).map(photo => {
+              <div className="live-selection-wrapper">
+                <div className="recent-photos-column">
+                  {recentPhotos.map(photo => {
                     const index = selectedPhotos.indexOf(photo.name);
                     const isSelected = index !== -1;
                     return (
@@ -826,60 +932,105 @@ function App() {
                         </div>
                     );
                   })}
+                  {recentPhotos.length === 0 && (
+                      <div style={{ color: 'var(--text-muted)', fontSize: '0.9rem', textAlign: 'center', marginTop: '20px' }}>No photos yet</div>
+                  )}
                 </div>
-              )}
+                <div className="highlighted-photo-container">
+                  {highlightedPhoto ? (
+                      <div className="highlighted-photo-wrapper">
+                          <div className="highlighted-img-container">
+                              <img src={getAssetUrl('photo', recentPhotos.find(p => p.name === highlightedPhoto) || highlightedPhoto)} alt="Highlighted" className="highlighted-img" />
+                              {selectedPhotos.includes(highlightedPhoto) && (
+                                  <div className="large-badge">{selectedPhotos.indexOf(highlightedPhoto) + 1}</div>
+                              )}
+                          </div>
+                          <div className="highlighted-actions">
+                              <button
+                                  className={selectedPhotos.includes(highlightedPhoto) ? 'reject-btn' : 'approve-btn'}
+                                  onClick={() => togglePhotoSelection(highlightedPhoto)}
+                                  disabled={!selectedPhotos.includes(highlightedPhoto) && selectedPhotos.length >= requiredPhotos}
+                                  title={selectedPhotos.includes(highlightedPhoto) ? 'Deselect Photo' : 'Select Photo'}
+                              >
+                                  {selectedPhotos.includes(highlightedPhoto) ? '❌' : '✅'}
+                              </button>
+                              <button
+                                  className="reject-btn"
+                                  onClick={(e) => handleDeletePhoto(highlightedPhoto, e)}
+                                  disabled={isProcessing}
+                                  title="Delete Photo"
+                              >
+                                  🗑️
+                              </button>
+                          </div>
+                      </div>
+                  ) : (
+                      <div className="no-photo" style={{ border: 'none' }}><p>Waiting for new photos...</p></div>
+                  )}
+                </div>
+              </div>
             </div>
-            <div className="controls-container">
-              <h2>Controls</h2>
-              <div className="control-group">
-                <label htmlFor="template-select">Active Template:</label>
+        
+        {/* --- Controls Section --- */}
+            <div className="controls-container" style={{ justifyContent: 'space-between' }}>
+              <div className="control-group" style={{ marginBottom: '0' }}>
+                <label htmlFor="template-select" style={{ alignSelf: 'flex-start', marginBottom: '2px' }}>Active Template:</label>
                 <select id="template-select" value={activeTemplate} onChange={(e) => { setActiveTemplate(e.target.value); setSelectedPhotos([]); setLiveTemplateBoxes([]); }} disabled={templates.length === 0 || isProcessing}>
                   {templates.length > 0 ? templates.map(t => <option key={t} value={t}>{t}</option>) : <option>No templates found</option>}
                 </select>
               </div>
 
               {activeTemplate && (
-                <div className="live-template-preview" style={{ marginTop: '15px', textAlign: 'center' }}>
-                  <p style={{fontSize: '0.9rem', marginBottom: '10px', fontWeight: 'bold'}}>Template Layout (Photo Order):</p>
-                  <div style={{ position: 'relative', width: '100%', maxWidth: '200px', margin: '0 auto' }}>
-                    <img 
-                      src={getAssetUrl('template', activeTemplate)} 
-                      alt="Layout Preview"
-                      style={{ width: '100%', height: 'auto', display: 'block', border: '1px solid var(--border-color)', borderRadius: '4px' }}
-                      onLoad={(e) => {
-                         const img = e.target;
-                         const config = appConfig[activeTemplate];
-                         if (config) {
-                           let areas = config.areas || (config.x !== undefined ? [config] : []);
-                           const naturalW = img.naturalWidth;
-                           const naturalH = img.naturalHeight;
-                           setLiveTemplateBoxes(areas.map(area => ({
-                              left: `${(area.x / naturalW) * 100}%`,
-                              top: `${(area.y / naturalH) * 100}%`,
-                              width: `${(area.width / naturalW) * 100}%`,
-                              height: `${(area.height / naturalH) * 100}%`
-                           })));
-                         }
-                      }}
-                    />
-                    {liveTemplateBoxes.map((box, idx) => (
-                      <div key={idx} style={{ position: 'absolute', border: '2px solid #4CAF50', background: 'rgba(76, 175, 80, 0.4)', left: box.left, top: box.top, width: box.width, height: box.height, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold', fontSize: '1.2rem', textShadow: '1px 1px 2px black' }}>
-                        {idx + 1}
-                      </div>
-                    ))}
+                <div className="live-template-preview" style={{ marginTop: '-5px' }}>
+                  <div className="live-template-preview-wrapper">
+                    <div style={{ position: 'relative', display: 'inline-block', height: '100%', maxWidth: '100%' }}>
+                      <img 
+                        id="live-preview-img"
+                        src={getAssetUrl('template', activeTemplate)} 
+                        alt="Layout Preview"
+                        className="live-template-preview-img"
+                        style={{ display: 'block', height: '100%', width: 'auto', maxWidth: '100%', objectFit: 'contain' }}
+                        onLoad={() => window.dispatchEvent(new Event('template-loaded'))}
+                      />
+                      {liveTemplateBoxes.map((box, idx) => {
+                        const hasPhoto = selectedPhotos[idx];
+                        const pos = photoPositions[idx] || {x: 50, y: 50};
+                        return (
+                          <div key={idx} className="live-template-box" 
+                            style={{ 
+                              left: box.left, top: box.top, width: box.width, height: box.height,
+                              background: hasPhoto ? 'transparent' : 'rgba(76, 175, 80, 0.4)',
+                              border: hasPhoto ? '2px solid rgba(255, 255, 255, 0.8)' : '2px solid #4CAF50',
+                              overflow: 'hidden',
+                              cursor: hasPhoto ? 'grab' : 'default',
+                              padding: 0
+                            }}
+                            onMouseDown={hasPhoto ? (e) => handlePhotoDragStart(e, idx) : undefined}
+                            onTouchStart={hasPhoto ? (e) => handlePhotoDragStart(e, idx) : undefined}
+                          >
+                            {hasPhoto ? (
+                               <img 
+                                 src={getAssetUrl('photo', recentPhotos.find(p => p.name === selectedPhotos[idx]) || selectedPhotos[idx])} 
+                                 style={{ width: '100%', height: '100%', objectFit: 'cover', objectPosition: `${pos.x}% ${pos.y}%`, pointerEvents: 'none', display: 'block' }} 
+                                 alt="Guest"
+                               />
+                            ) : (
+                               idx + 1
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
               )}
 
-              <div className="actions">
+              <div style={{ position: 'absolute', bottom: '12px', right: '12px', zIndex: 50 }}>
                 {selectedPhotos.length === requiredPhotos && (
-                  <button onClick={handleApproveAndPreview} disabled={isProcessing} className="approve-btn">
-                    {isProcessing ? 'Processing...' : '✅ Approve & Preview Card'}
+                  <button onClick={handleApproveAndPreview} disabled={isProcessing} className="approve-btn" style={{ padding: '8px 16px', fontSize: '0.95rem', boxShadow: '0 4px 10px rgba(0,0,0,0.3)' }}>
+                    {isProcessing ? 'Processing...' : 'Proceed'}
                   </button>
                 )}
-                <button onClick={handleClearSelection} disabled={selectedPhotos.length === 0 || isProcessing} className="reject-btn">
-                  ❌ Clear Selection
-                </button>
               </div>
             </div>
           </main>
@@ -887,51 +1038,55 @@ function App() {
       ) : (
         // --- Template Setup Mode ---
         <main className="main-content setup-layout">
-          <div className="setup-container">
+          <div className={`setup-container ${selectedTemplateForEditing ? 'editing-mode' : 'list-mode'}`}>
             {selectedTemplateForEditing ? (
               <>
                 <h2>Editing: {selectedTemplateForEditing}</h2>
                 <p>Draw up to 4 rectangles on the template where the guest's photos should appear (in order).</p>
-                <div className="template-editor" onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp}>
-                  <img 
-                    ref={templateImageRef} 
-                    src={getAssetUrl('template', selectedTemplateForEditing)} 
-                    alt="Template for setup" 
-                    draggable="false"
-                    onLoad={handleTemplateImageLoad}
-                  />
-                  {selectionBoxes.map((box, idx) => (
-                    <div key={idx} className="selection-box" style={{
-                      left: `${box.x}px`,
-                      top: `${box.y}px`,
-                      width: `${box.width}px`,
-                      height: `${box.height}px`,
-                    }}>
-                       <div className="box-index">{idx + 1}</div>
-                    </div>
-                  ))}
-                  {currentBox && currentBox.width > 0 && (
-                    <div className="selection-box" style={{
-                      left: `${currentBox.x}px`,
-                      top: `${currentBox.y}px`,
-                      width: `${currentBox.width}px`,
-                      height: `${currentBox.height}px`,
-                    }} />
-                  )}
+                <div className="template-editor" onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp}>
+                  <div style={{ position: 'relative', display: 'inline-block', margin: '0 auto' }} onMouseDown={handleMouseDown}>
+                    <img 
+                      ref={templateImageRef} 
+                      src={getAssetUrl('template', selectedTemplateForEditing)} 
+                      alt="Template for setup" 
+                      draggable="false"
+                      onLoad={handleTemplateImageLoad}
+                    />
+                    {selectionBoxes.map((box, idx) => (
+                      <div key={idx} className="selection-box" style={{
+                        left: `${box.x}px`,
+                        top: `${box.y}px`,
+                        width: `${box.width}px`,
+                        height: `${box.height}px`,
+                      }}>
+                         <div className="box-index">{idx + 1}</div>
+                      </div>
+                    ))}
+                    {currentBox && currentBox.width > 0 && (
+                      <div className="selection-box" style={{
+                        left: `${currentBox.x}px`,
+                        top: `${currentBox.y}px`,
+                        width: `${currentBox.width}px`,
+                        height: `${currentBox.height}px`,
+                      }} />
+                    )}
+                  </div>
                 </div>
-                <div className="actions">
-                  <button onClick={handleClearBoxes} className="reject-btn" type="button">Clear Areas</button>
-                  <button onClick={handleSaveConfig} className="save-config-btn">💾 Save Configuration</button>
-                  <button onClick={() => setSelectedTemplateForEditing(null)} className="reject-btn">Back to List</button>
+                <div className="actions" style={{ flexDirection: 'row', justifyContent: 'center', gap: '15px' }}>
+                  <button onClick={handleClearBoxes} className="secondary-btn" type="button">Clear Areas</button>
+                  <button onClick={handleSaveConfig} className="save-config-btn">Save Configuration</button>
+                  <button onClick={() => setSelectedTemplateForEditing(null)} className="secondary-btn">Back to List</button>
                 </div>
               </>
             ) : (
+              // --- Settings Page: List Mode ---
               <>
-                <div className="config-section">
+                {/* Top Card: System Configurations (25%) */}
+                <div className="config-section system-config-card">
                   <h2>System Configuration</h2>
                   <div className="control-group">
-                    <label htmlFor="camera-folder-input">Camera Output Folder Path:</label>
-                    <div className="input-group" style={{ display: 'flex', gap: '10px', marginBottom: '10px' }}>
+                    <label htmlFor="camera-folder-input" style={{marginBottom: 0}}>Camera Output Folder Path:</label>
+                    <div className="input-group" style={{ marginTop: 0, flexGrow: 1, display: 'flex', gap: '10px', alignItems: 'center' }}>
                       <input
                         id="camera-folder-input"
                         type="text"
@@ -939,46 +1094,38 @@ function App() {
                         onChange={(e) => setCameraFolderPath(e.target.value)}
                         placeholder="e.g., C:\Users\YourName\Pictures\PhotoBooth"
                         disabled={isProcessing}
-                        style={{ flex: 1 }}
+                        style={{ flex: 1, marginBottom: 0 }}
                       />
                       <button onClick={handleBrowseFolder} disabled={isProcessing} className="browse-btn" type="button">
                         Browse...
                       </button>
+                      <button onClick={handleSetCameraFolder} disabled={isProcessing} className="save-config-btn">
+                        {isProcessing ? 'Setting...' : 'Set Watch Folder'}
+                      </button>
                     </div>
-                    <button onClick={handleSetCameraFolder} disabled={isProcessing} className="save-config-btn">
-                      {isProcessing ? 'Setting...' : 'Set Watch Folder'}
-                    </button>
                   </div>
                 </div>
 
-                <h2>Template Management</h2>
-                <div className="template-gallery">
-                  {templates.map(template => (
-                    <div key={template} className="template-item">
-                      <img
-                        src={getAssetUrl('template', template)}
-                        alt={template}
-                        className="template-thumbnail"
-                        onClick={() => handleSelectTemplateForEditing(template)}
-                      />
-                      <button
-                        className="delete-template-btn"
-                        onClick={(e) => {
-                          e.stopPropagation(); // Prevent image click when deleting
-                          handleDeleteTemplate(template);
-                        }}
-                        title={`Delete ${template}`}
-                      >&times;</button>
-                      <p className="template-name">{template}</p>
-                    </div>
-                  ))}
-                </div>
-                <div className="upload-container">
-                  <h3>Or Upload a New Template</h3>
-                  <label htmlFor="template-upload" className={`upload-btn ${isProcessing ? 'disabled' : ''}`}>
-                    {isProcessing ? 'Uploading...' : '📂 Choose File'}
-                  </label>
-                  <input type="file" id="template-upload" accept="image/png, image/jpeg" onChange={handleTemplateUpload} disabled={isProcessing} />
+                {/* Bottom Card: Template Management (75%) */}
+                <div className="config-section template-management-card">
+                  <h2>Template Management</h2>
+                  <div className="template-gallery">
+                    {templates.map(template => (
+                      <div key={template} className="template-item">
+                        <div className="template-thumbnail-wrapper" onClick={() => handleSelectTemplateForEditing(template)}>
+                          <img src={getAssetUrl('template', template)} alt={template} className="template-thumbnail" />
+                          <div className="template-hover-overlay">Click to setup image areas</div>
+                        </div>
+                        <button className="delete-template-btn" onClick={(e) => { e.stopPropagation(); handleDeleteTemplate(template); }} title={`Delete ${template}`}>&times;</button>
+                        <p className="template-name">{template}</p>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="upload-container">
+                    <h3>Upload New Template</h3>
+                    <label htmlFor="template-upload" className={`upload-btn ${isProcessing ? 'disabled' : ''}`}>{isProcessing ? 'Uploading...' : '📂 Browse...'}</label>
+                    <input type="file" id="template-upload" accept="image/png, image/jpeg" onChange={handleTemplateUpload} disabled={isProcessing} />
+                  </div>
                 </div>
               </>
             )}
@@ -1011,8 +1158,8 @@ function App() {
               ))}
               {subDirs.length === 0 && <li style={{ padding: '10px', color: 'var(--text-muted)' }}>No subfolders found.</li>}
             </ul>
-            <div className="actions" style={{ marginTop: 'auto', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-              <button onClick={() => setShowFolderModal(false)} className="reject-btn">Cancel</button>
+            <div className="actions" style={{ flexDirection: 'row', marginTop: 'auto', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button onClick={() => setShowFolderModal(false)} className="secondary-btn">Cancel</button>
               <button onClick={() => {
                 setCameraFolderPath(browsePath);
                 setShowFolderModal(false);
@@ -1066,7 +1213,7 @@ function App() {
                 </ul>
               </li>
             </ol>
-            <button onClick={() => setShowInstructions(false)} className="reject-btn">Close</button>
+            <button onClick={() => setShowInstructions(false)} className="secondary-btn">Close</button>
           </div>
         </div>
       )}

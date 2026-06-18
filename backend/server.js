@@ -124,8 +124,40 @@ function startWatcher(folderPath) {
         // Copy the file to the internal 'camera_folder' to be served statically
         const destinationPath = path.join(cameraFolder, fileName);
         
+        const handleSuccessfulAdd = (name) => {
+            // Remove existing entry to prevent duplicates on 'change' event
+            const existingIndex = recentPhotos.findIndex(p => p.name === name);
+            if (existingIndex !== -1) {
+                recentPhotos.splice(existingIndex, 1);
+            }
+
+            const newPhoto = {
+                name: name,
+                path: name,
+                timestamp: Date.now()
+            };
+            recentPhotos.unshift(newPhoto);
+            if (recentPhotos.length > 10) {
+                recentPhotos.length = 10;
+            }
+            
+            lastSessionUpdate = Date.now(); // Notify frontend that a change happened
+
+            // Emit the event with the URL that points to the internal folder
+            io.emit('NEW_PHOTO', {
+                url: `http://localhost:${PORT}/photos/${name}`,
+                name: name
+            });
+        };
+
         // Function to retry copying if the file is locked by the camera software
         const copyWithRetry = (src, dest, retries = 20, delay = 1000) => {
+            if (path.resolve(src) === path.resolve(dest)) {
+                console.log(`✅ File is already in the camera folder. Skipping copy.`);
+                handleSuccessfulAdd(fileName);
+                return;
+            }
+
             fs.copyFile(src, dest, (err) => {
                 if (err) {
                     if (retries > 0) {
@@ -137,30 +169,7 @@ function startWatcher(folderPath) {
                     return;
                 }
                 console.log(`✅ Copied ${fileName} to internal camera folder for serving.`);
-            
-                // Remove existing entry to prevent duplicates on 'change' event
-                const existingIndex = recentPhotos.findIndex(p => p.name === fileName);
-                if (existingIndex !== -1) {
-                    recentPhotos.splice(existingIndex, 1);
-                }
-
-                const newPhoto = {
-                    name: fileName,
-                    path: fileName,
-                    timestamp: Date.now()
-                };
-                recentPhotos.unshift(newPhoto);
-                if (recentPhotos.length > 10) {
-                    recentPhotos.length = 10;
-                }
-                
-                lastSessionUpdate = Date.now(); // Notify frontend that a change happened
-
-                // Emit the event with the URL that points to the internal folder
-                io.emit('NEW_PHOTO', {
-                    url: `http://localhost:${PORT}/photos/${fileName}`,
-                    name: fileName
-                });
+                handleSuccessfulAdd(fileName);
             });
         };
 
@@ -320,6 +329,7 @@ app.get('/api/config', (req, res) => {
 
 // --- NEW: GET endpoint for latest photo polling ---
 app.get('/api/latest-photo', (req, res) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     res.status(200).json({ recent: recentPhotos, lastUpdate: lastSessionUpdate });
 });
 
