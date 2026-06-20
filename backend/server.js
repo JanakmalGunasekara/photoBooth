@@ -49,14 +49,171 @@ if (fs.existsSync(configFilePath)) {
 
 // --- Default configuration for the main template to prevent errors on first run ---
 const DEFAULT_TEMPLATE_CONFIG = {
-    'thank-you-template.png': {
-        areas: [{
-            x: 100,
-            y: 290,
-            width: 1040,
-            height: 1040
-        }]
+    'temp_1.png': {
+        areas: [{ x: 100, y: 100, width: 1000, height: 1000 }],
+        texts: [{ id: 'title', text: 'Happy Wedding', x: 600, y: 1300, fontSize: 80, color: '#000000', fontFamily: 'Cursive' }]
+    },
+    'temp_1.jpg': {
+        areas: [{ x: 100, y: 100, width: 1000, height: 1000 }],
+        texts: [{ id: 'title', text: 'Happy Wedding', x: 600, y: 1300, fontSize: 80, color: '#000000', fontFamily: 'Cursive' }]
+    },
+    'temp_2.png': {
+        areas: [{ x: 100, y: 100, width: 1000, height: 700 }, { x: 100, y: 850, width: 1000, height: 700 }],
+        texts: [{ id: 'title', text: 'Sweet Memories', x: 600, y: 1650, fontSize: 70, color: '#000000', fontFamily: 'Arial' }]
+    },
+    'temp_2.jpg': {
+        areas: [{ x: 100, y: 100, width: 1000, height: 700 }, { x: 100, y: 850, width: 1000, height: 700 }],
+        texts: [{ id: 'title', text: 'Sweet Memories', x: 600, y: 1650, fontSize: 70, color: '#000000', fontFamily: 'Arial' }]
+    },
+    'temp_3.png': {
+        areas: [{ x: 100, y: 100, width: 480, height: 600 }, { x: 620, y: 100, width: 480, height: 600 }, { x: 100, y: 750, width: 1000, height: 700 }],
+        texts: [{ id: 'title', text: 'Thank You!', x: 600, y: 1600, fontSize: 80, color: '#000000', fontFamily: 'Times New Roman' }]
+    },
+    'temp_3.jpg': {
+        areas: [{ x: 100, y: 100, width: 480, height: 600 }, { x: 620, y: 100, width: 480, height: 600 }, { x: 100, y: 750, width: 1000, height: 700 }],
+        texts: [{ id: 'title', text: 'Thank You!', x: 600, y: 1600, fontSize: 80, color: '#000000', fontFamily: 'Times New Roman' }]
     }
+};
+
+const getDisplayText = (t) => {
+    const lines = (t.text || '').split('\n');
+    const toRoman = (num) => {
+        const lookup = {M:1000,CM:900,D:500,CD:400,C:100,XC:90,L:50,XL:40,X:10,IX:9,V:5,IV:4,I:1};
+        let roman = '', i;
+        for (i in lookup) { while (num >= lookup[i]) { roman += i; num -= lookup[i]; } }
+        return roman;
+    };
+    return lines.map((line, idx) => {
+        if (t.listType === 'bullet') return `• ${line}`;
+        if (t.listType === 'circle') return `◦ ${line}`;
+        if (t.listType === 'square') return `■ ${line}`;
+        if (t.listType === 'star') return `★ ${line}`;
+        if (t.listType === 'number') return `${idx + 1}. ${line}`;
+        if (t.listType === 'roman_lower') return `${toRoman(idx + 1).toLowerCase()}. ${line}`;
+        if (t.listType === 'roman_upper') return `${toRoman(idx + 1)}. ${line}`;
+        return line;
+    });
+};
+
+// --- Helper for Overlaying SVG Text ---
+const buildTextOverlay = (texts, width, height) => {
+    if (!texts || texts.length === 0) return null;
+    let svgContent = `<svg width="${width}" height="${height}">`;
+    
+    // 1. Generate Definitions for Gradients
+    svgContent += `<defs>`;
+    for (const t of texts) {
+        if (t.fillType === 'gradient') {
+            const angle = t.gradientAngle || 90;
+            const x1 = Math.round(50 + Math.cos((angle - 180) * Math.PI / 180) * 50);
+            const y1 = Math.round(50 + Math.sin((angle - 180) * Math.PI / 180) * 50);
+            const x2 = Math.round(50 + Math.cos(angle * Math.PI / 180) * 50);
+            const y2 = Math.round(50 + Math.sin(angle * Math.PI / 180) * 50);
+            svgContent += `<linearGradient id="grad_${t.id}" x1="${x1}%" y1="${y1}%" x2="${x2}%" y2="${y2}%">
+                              <stop offset="0%" stop-color="${t.color || '#000'}" />
+                              <stop offset="100%" stop-color="${t.color2 || '#fff'}" />
+                           </linearGradient>`;
+        }
+    }
+    svgContent += `</defs>`;
+
+    for (const t of texts) {
+        const fontFamily = t.fontFamily || 'Arial';
+        const align = t.textAlign || 'center';
+        let textAnchor = 'middle';
+        if (align === 'left') textAnchor = 'start';
+        else if (align === 'right') textAnchor = 'end';
+        
+        const letterSpacing = t.letterSpacing || 0;
+        const lineHeight = t.lineHeight || 1.2;
+        const fw = t.fontWeight === 'normal' ? 'normal' : 'bold';
+        const fs_style = t.fontStyle || 'normal';
+        const td = t.textDecoration || 'none';
+        const size = t.fontSize || 50;
+        const lines = getDisplayText(t);
+        const effects = t.effects || {};
+
+        const drawTextLayer = (fill, stroke, strokeWidth, dx, dy) => {
+            let layerContent = `<text x="${t.x + dx}" y="${t.y + dy}" font-size="${size}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeWidth}" stroke-linejoin="round" font-family="${fontFamily}" font-weight="${fw}" font-style="${fs_style}" text-decoration="${td}" text-anchor="${textAnchor}" dominant-baseline="middle" letter-spacing="${letterSpacing}px">`;
+            for (let i = 0; i < lines.length; i++) {
+                const safeText = lines[i].replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+                layerContent += `<tspan x="${t.x + dx}" dy="${i === 0 ? '0' : `${lineHeight}em`}">${safeText}</tspan>`;
+            }
+            layerContent += `</text>`;
+            return layerContent;
+        };
+
+        let nodeContent = '';
+        let finalFill = t.fillType === 'gradient' ? `url(#grad_${t.id})` : (t.color || '#000000');
+        let mainStroke = 'none';
+        let mainStrokeWidth = 0;
+
+        // Render Base Background if enabled
+        if (effects.background?.enabled) {
+            const bgC = effects.background.color ?? '#ffff00';
+            nodeContent += `<filter id="bg_${t.id}" x="-10%" y="-10%" width="120%" height="120%"><feFlood flood-color="${bgC}" result="bg" /><feMerge><feMergeNode in="bg"/><feMergeNode in="SourceGraphic"/></feMerge></filter>`;
+            // The text element later will need filter="url(#bg_id)"
+        }
+
+        // Render Effects layers (Back to Front)
+        if (effects.echo?.enabled) { 
+            const d1 = effects.echo.distance ?? 5; 
+            const r = (effects.echo.angle ?? 45) * Math.PI / 180;
+            const c = effects.echo.color ?? '#000000';
+            nodeContent += drawTextLayer('rgba(0,0,0,0.4)', 'none', 0, Math.cos(r)*d1*2, Math.sin(r)*d1*2); 
+            nodeContent += drawTextLayer(c, 'none', 0, Math.cos(r)*d1, Math.sin(r)*d1); 
+        }
+        if (effects.drop?.enabled) { 
+            const d = effects.drop.distance ?? 5;
+            const r = (effects.drop.angle ?? 45) * Math.PI / 180;
+            const c = effects.drop.color ?? '#000000';
+            nodeContent += drawTextLayer(c, 'none', 0, Math.cos(r)*d, Math.sin(r)*d); 
+        }
+        if (effects.glow?.enabled) { 
+            const intensity = effects.glow.intensity ?? 10;
+            const c = effects.glow.color ?? '#ff0000';
+            nodeContent += drawTextLayer(c, c, intensity, 0, 0); 
+        }
+        if (effects.splice?.enabled) { 
+            const d = effects.splice.distance ?? 5;
+            const r = (effects.splice.angle ?? 45) * Math.PI / 180;
+            const c = effects.splice.color ?? '#000000';
+            const thick = effects.splice.thickness ?? 2;
+            nodeContent += drawTextLayer(c, 'none', 0, Math.cos(r)*d, Math.sin(r)*d); 
+            mainStroke = t.color || '#000'; mainStrokeWidth = thick; finalFill = 'none';
+        }
+        if (effects.neon?.enabled) { 
+            const c = effects.neon.color ?? '#ff00ff';
+            nodeContent += drawTextLayer(c, c, size*0.1, 0, 0); 
+            nodeContent += drawTextLayer(c, c, size*0.05, 0, 0); 
+            finalFill = '#ffffff'; 
+        }
+        if (effects.glitch?.enabled) { 
+            nodeContent += drawTextLayer('cyan', 'none', 0, size*0.04, 0); 
+            nodeContent += drawTextLayer('red', 'none', 0, -size*0.04, 0); 
+        }
+        
+        if (effects.outline?.enabled && !effects.hollow?.enabled && !effects.splice?.enabled) {
+            const c = effects.outline.color ?? '#000000';
+            const thick = effects.outline.thickness ?? 2;
+            nodeContent += drawTextLayer(c, c, thick, 0, 0); 
+        }
+        if (effects.hollow?.enabled) {
+            mainStroke = t.color || '#000'; mainStrokeWidth = effects.hollow.thickness ?? 2; finalFill = 'none';
+        }
+
+        // Main Text Layer
+        let txt = drawTextLayer(finalFill, mainStroke, mainStrokeWidth, 0, 0);
+        if (effects.background?.enabled) {
+            let txt = drawTextLayer(finalColor, 'none', 0, 0, 0);
+            txt = txt.replace('<text ', `<text filter="url(#bg_${t.id})" `);
+        }
+        nodeContent += txt;
+
+        svgContent += `<g id="${t.id}">${nodeContent}</g>`;
+    }
+    svgContent += `</svg>`;
+    return Buffer.from(svgContent);
 };
 
 
@@ -295,6 +452,11 @@ app.delete('/api/templates/:templateName', (req, res) => {
         return res.status(400).json({ error: 'Invalid template name.' });
     }
 
+        // Security: Prevent deleting predefined default templates
+        if (templateName.toLowerCase().startsWith('temp_') || templateName.toLowerCase().startsWith('default_')) {
+            return res.status(403).json({ error: 'Default templates cannot be deleted.' });
+        }
+
     const templatePath = path.join(templatesFolder, templateName);
 
     // 1. Delete the image file from the 'templates' folder.
@@ -323,8 +485,9 @@ app.delete('/api/templates/:templateName', (req, res) => {
 
 // --- NEW: GET endpoint to fetch all template configurations ---
 app.get('/api/config', (req, res) => {
-    // The 'templateConfigs' variable is already loaded into memory on startup
-    res.status(200).json(templateConfigs);
+    // Merge the predefined defaults with customized in-memory config
+    const mergedConfig = { ...DEFAULT_TEMPLATE_CONFIG, ...templateConfigs };
+    res.status(200).json(mergedConfig);
 });
 
 // --- NEW: GET endpoint for latest photo polling ---
@@ -412,8 +575,14 @@ app.post('/api/merge', async (req, res) => {
 
         console.log(`Generating merge preview for ${guestPhotoNames.join(', ')}...`);
 
-        const templateMetadata = await sharp(templatePath).metadata();
+        const templateImage = sharp(templatePath);
+        const templateMetadata = await templateImage.metadata();
+        const templateStats = await templateImage.stats();
+        const isOpaque = templateStats.isOpaque;
+
         const compositeOperations = [];
+        if (isOpaque) compositeOperations.push({ input: templatePath, top: 0, left: 0 });
+
         const photosToMerge = guestPhotoNames.slice(0, areas.length);
 
         for (let i = 0; i < photosToMerge.length; i++) {
@@ -447,6 +616,12 @@ app.post('/api/merge', async (req, res) => {
         }
 
         compositeOperations.push({ input: templatePath, top: 0, left: 0 });
+        if (!isOpaque) compositeOperations.push({ input: templatePath, top: 0, left: 0 });
+
+        const textOverlay = buildTextOverlay(config.texts, templateMetadata.width, templateMetadata.height);
+        if (textOverlay) {
+            compositeOperations.push({ input: textOverlay, top: 0, left: 0 });
+        }
 
         const outputBuffer = await sharp({
             create: {
@@ -506,8 +681,14 @@ app.post('/api/email', async (req, res) => {
     try {
         if (!fs.existsSync(templatePath)) return res.status(404).json({ error: 'Template not found.' });
 
-        const templateMetadata = await sharp(templatePath).metadata();
+        const templateImage = sharp(templatePath);
+        const templateMetadata = await templateImage.metadata();
+        const templateStats = await templateImage.stats();
+        const isOpaque = templateStats.isOpaque;
+
         const compositeOperations = [];
+        if (isOpaque) compositeOperations.push({ input: templatePath, top: 0, left: 0 });
+
         const photosToMerge = guestPhotoNames.slice(0, areas.length);
 
         for (let i = 0; i < photosToMerge.length; i++) {
@@ -534,6 +715,13 @@ app.post('/api/email', async (req, res) => {
             }
         }
         compositeOperations.push({ input: templatePath, top: 0, left: 0 });
+        
+        if (!isOpaque) compositeOperations.push({ input: templatePath, top: 0, left: 0 });
+
+        const textOverlay = buildTextOverlay(config.texts, templateMetadata.width, templateMetadata.height);
+        if (textOverlay) {
+            compositeOperations.push({ input: textOverlay, top: 0, left: 0 });
+        }
 
         await sharp({
             create: { width: templateMetadata.width, height: templateMetadata.height, channels: 4, background: { r: 255, g: 255, b: 255, alpha: 1 } }
@@ -605,10 +793,16 @@ app.post('/api/print', async (req, res) => {
             return res.status(404).json({ error: 'Template not found for finalization.' });
         }
 
-        const templateMetadata = await sharp(templatePath).metadata();
+        const templateImage = sharp(templatePath);
+        const templateMetadata = await templateImage.metadata();
+        const templateStats = await templateImage.stats();
+        const isOpaque = templateStats.isOpaque;
         const templateWidth = templateMetadata.width;
         const templateHeight = templateMetadata.height;
+        
         const compositeOperations = [];
+        if (isOpaque) compositeOperations.push({ input: templatePath, top: 0, left: 0 });
+
         const photosToMerge = guestPhotoNames.slice(0, areas.length);
 
         for (let i = 0; i < photosToMerge.length; i++) {
@@ -642,6 +836,12 @@ app.post('/api/print', async (req, res) => {
         }
 
         compositeOperations.push({ input: templatePath, top: 0, left: 0 });
+        if (!isOpaque) compositeOperations.push({ input: templatePath, top: 0, left: 0 });
+
+        const textOverlay = buildTextOverlay(config.texts, templateWidth, templateHeight);
+        if (textOverlay) {
+            compositeOperations.push({ input: textOverlay, top: 0, left: 0 });
+        }
 
         await sharp({
             create: {
