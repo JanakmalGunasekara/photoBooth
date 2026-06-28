@@ -24,10 +24,11 @@ app.use(express.json());
 // --- 2. Define folder paths and ensure they exist ---
 const cameraFolder = path.join(__dirname, 'camera_folder');
 const templatesFolder = path.join(__dirname, 'templates');
+const defaultsFolder = path.join(__dirname, 'defaults');
 const outputsFolder = path.join(__dirname, 'outputs');
 const configFilePath = path.join(__dirname, 'config.json');
 
-[cameraFolder, templatesFolder, outputsFolder].forEach(folder => {
+[cameraFolder, templatesFolder, defaultsFolder, outputsFolder].forEach(folder => {
     if (!fs.existsSync(folder)) {
         console.log(`Creating directory: ${folder}`);
         fs.mkdirSync(folder, { recursive: true });
@@ -45,6 +46,22 @@ if (fs.existsSync(configFilePath)) {
     } catch (err) {
         console.error('Error reading config.json:', err);
     }
+}
+
+// Always synchronize the defaultTemplateList with the contents of the defaults folder on startup
+try {
+    if (fs.existsSync(defaultsFolder)) {
+        const defaultFiles = fs.readdirSync(defaultsFolder).filter(file => /\.(jpe?g|png)$/i.test(file));
+        const currentList = templateConfigs.defaultTemplateList || [];
+        // Check if the list in the config is different from the actual files on disk
+        if (JSON.stringify(currentList.sort()) !== JSON.stringify(defaultFiles.sort())) {
+            console.log('Synchronizing default templates list with defaults folder...');
+            templateConfigs.defaultTemplateList = defaultFiles;
+            fs.writeFileSync(configFilePath, JSON.stringify(templateConfigs, null, 2));
+        }
+    }
+} catch (err) {
+    console.error('Error synchronizing default templates:', err);
 }
 
 // --- Default configuration for the main template to prevent errors on first run ---
@@ -221,13 +238,18 @@ const buildTextOverlay = (texts, width, height) => {
 app.use('/photos', express.static(cameraFolder));
 app.use('/outputs', express.static(outputsFolder));
 app.use('/templates', express.static(templatesFolder));
+app.use('/defaults', express.static(defaultsFolder));
 
 // Handle browser requests for favicon.ico to prevent 404 errors in the console.
 app.get('/favicon.ico', (req, res) => res.status(204).send());
 
 // --- Multer Setup for Template Uploads ---
 const storage = multer.diskStorage({
-    destination: (req, file, cb) => cb(null, templatesFolder),
+    destination: (req, file, cb) => {
+        const { isDefault } = req.body;
+        const destFolder = isDefault === 'true' ? defaultsFolder : templatesFolder;
+        cb(null, destFolder);
+    },
     filename: (req, file, cb) => cb(null, file.originalname)
 });
 const upload = multer({ storage: storage });
@@ -352,19 +374,34 @@ app.get('/api/printers', (req, res) => {
 
 // --- NEW: GET endpoint to list available templates ---
 app.get('/api/templates', (req, res) => {
-    fs.readdir(templatesFolder, (err, files) => {
-        if (err) {
-            console.error("Could not list the templates directory.", err);
-            return res.status(500).json({ error: 'Failed to read templates directory.' });
-        }
-        const imageFiles = files.filter(file => /\.(jpe?g|png)$/i.test(file));
-        res.json(imageFiles);
-    });
+    try {
+        const customFiles = fs.readdirSync(templatesFolder)
+            .filter(file => /\.(jpe?g|png)$/i.test(file));
+
+        const defaultFiles = fs.readdirSync(defaultsFolder)
+            .filter(file => /\.(jpe?g|png)$/i.test(file));
+
+        const allFiles = [...new Set([...customFiles, ...defaultFiles])]; // Combine and remove duplicates
+        res.json(allFiles);
+    } catch (err) {
+        console.error("Could not list the template directories.", err);
+        res.status(500).json({ error: 'Failed to read template directories.' });
+    }
 });
 
 // --- NEW: POST endpoint to upload a new template ---
-app.post('/api/templates/upload', upload.single('template'), (req, res) => {
-    res.status(200).json({ success: true, message: `Template '${req.file.filename}' uploaded successfully.` });
+app.post('/api/templates/upload', upload.single('template'), async (req, res) => {
+    const { isDefault } = req.body; // 'true' or 'false' as a string
+    const filename = req.file.filename;
+
+    if (isDefault === 'true' && !templateConfigs.defaultTemplateList) {
+        templateConfigs.defaultTemplateList = [];
+    }
+    if (isDefault === 'true' && !templateConfigs.defaultTemplateList.includes(filename)) {
+        templateConfigs.defaultTemplateList.push(filename);
+        // No need to write to file here, will be handled by the config save on the frontend
+    }
+    res.status(200).json({ success: true, message: `Template '${filename}' uploaded successfully.` });
 });
 
 // --- UPDATED: POST endpoint to save configuration ---
@@ -452,12 +489,9 @@ app.delete('/api/templates/:templateName', (req, res) => {
         return res.status(400).json({ error: 'Invalid template name.' });
     }
 
-        // Security: Prevent deleting predefined default templates
-        if (templateName.toLowerCase().startsWith('temp_') || templateName.toLowerCase().startsWith('default_')) {
-            return res.status(403).json({ error: 'Default templates cannot be deleted.' });
-        }
-
-    const templatePath = path.join(templatesFolder, templateName);
+    const isDefault = (templateConfigs.defaultTemplateList || []).includes(templateName);
+    const folder = isDefault ? defaultsFolder : templatesFolder;
+    const templatePath = path.join(folder, templateName);
 
     // 1. Delete the image file from the 'templates' folder.
     fs.unlink(templatePath, (err) => {
@@ -469,6 +503,12 @@ app.delete('/api/templates/:templateName', (req, res) => {
         // 2. Delete the configuration entry from memory and the config.json file.
         if (templateConfigs[templateName]) {
             delete templateConfigs[templateName];
+        }
+        // 3. Also remove from the default template list if it exists there
+        if (templateConfigs.defaultTemplateList) {
+            templateConfigs.defaultTemplateList = templateConfigs.defaultTemplateList.filter(t => t !== templateName);
+        }
+        
             fs.writeFile(configFilePath, JSON.stringify(templateConfigs, null, 2), (writeErr) => {
                 if (writeErr) {
                     console.error('Error writing updated config.json:', writeErr);
@@ -477,9 +517,7 @@ app.delete('/api/templates/:templateName', (req, res) => {
                 console.log(`Configuration and template file removed for ${templateName}.`);
                 res.status(200).json({ success: true, message: `Template '${templateName}' deleted.` });
             });
-        } else {
-            res.status(200).json({ success: true, message: `Template '${templateName}' deleted (no config found).` });
-        }
+        
     });
 });
 
@@ -566,7 +604,9 @@ app.post('/api/merge', async (req, res) => {
          return res.status(400).json({ error: `Template configuration is invalid or missing selection areas.` });
     }
 
-    const templatePath = path.join(templatesFolder, templateName);
+    const isDefault = (templateConfigs.defaultTemplateList || []).includes(templateName);
+    const folder = isDefault ? defaultsFolder : templatesFolder;
+    const templatePath = path.join(folder, templateName);
 
     try {
         if (!fs.existsSync(templatePath)) {
@@ -674,7 +714,9 @@ app.post('/api/email', async (req, res) => {
     let areas = config.areas || (config.x !== undefined ? [{ x: config.x, y: config.y, width: config.width, height: config.height }] : null);
     if (!areas || areas.length === 0) return res.status(400).json({ error: `Template configuration is invalid.` });
 
-    const templatePath = path.join(templatesFolder, templateName);
+    const isDefault = (templateConfigs.defaultTemplateList || []).includes(templateName);
+    const folder = isDefault ? defaultsFolder : templatesFolder;
+    const templatePath = path.join(folder, templateName);
     const parsedGuestPhoto = path.parse(guestPhotoNames[0]);
     const outputPath = path.join(outputsFolder, `email_${Date.now()}_${parsedGuestPhoto.name}.jpg`);
 
@@ -784,7 +826,9 @@ app.post('/api/print', async (req, res) => {
          return res.status(400).json({ error: `Template configuration is invalid or missing selection areas.` });
     }
 
-    const templatePath = path.join(templatesFolder, templateName);
+    const isDefault = (templateConfigs.defaultTemplateList || []).includes(templateName);
+    const folder = isDefault ? defaultsFolder : templatesFolder;
+    const templatePath = path.join(folder, templateName);
     const parsedGuestPhoto = path.parse(guestPhotoNames[0]);
     const outputPath = path.join(outputsFolder, `merged_${Date.now()}_${parsedGuestPhoto.name}.jpg`);
 

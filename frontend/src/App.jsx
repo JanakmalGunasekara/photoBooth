@@ -3,9 +3,6 @@ import './App.css';
 
 const BACKEND_URL = 'http://localhost:5000'; // Define your backend URL
 
-const isDefaultTemplateName = (name) => name.toLowerCase().startsWith('temp_') || name.toLowerCase().startsWith('default_');
-const isCustomTemplateName = (name) => !isDefaultTemplateName(name);
-
 const getDisplayText = (t) => {
     const lines = (t.text || '').split('\n');
     
@@ -119,7 +116,10 @@ const getTextStyleOptions = (t, scale = 1) => {
 };
 
 function App() {
-  const FONT_OPTIONS = ['Arial', 'Verdana', 'Times New Roman', 'Georgia', 'Courier New', 'Brush Script MT', 'Comic Sans MS', 'Trebuchet MS', 'Arial Black', 'Impact', 'Lucida Sans Unicode', 'Tahoma', 'Garamond'];
+  const isDefaultTemplateName = (name, config) => (config.defaultTemplateList || []).includes(name);
+  const isCustomTemplateName = (name, config) => !isDefaultTemplateName(name, config);
+
+  const FONT_OPTIONS = ['Arial', 'Verdana', 'Times New Roman', 'Georgia', 'Courier New', 'Brush Script MT', 'Segoe Script', 'Lucida Handwriting', 'Edwardian Script ITC', 'Vivaldi', 'Freestyle Script', 'Comic Sans MS', 'Trebuchet MS', 'Arial Black', 'Impact', 'Lucida Sans Unicode', 'Tahoma', 'Garamond'];
   const WORD_SIZES = [8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72, 96, 144];
   const DEFAULT_COLORS = ['#000000', '#FFFFFF', '#FF0000', '#00FF00', '#0000FF', '#FFFF00', '#00FFFF', '#FF00FF', '#808080', '#C0C0C0'];
   
@@ -221,8 +221,8 @@ function App() {
           const hasEnabledDefaultTemplates = Object.prototype.hasOwnProperty.call(config, 'enabledDefaultTemplates');
           if (hasEnabledDefaultTemplates) {
             setEnabledDefaultTemplates(Array.isArray(config.enabledDefaultTemplates) ? config.enabledDefaultTemplates : []);
-          } else if (templateList.length > 0) {
-            setEnabledDefaultTemplates(templateList.filter(isDefaultTemplateName));
+          } else if (templateList.length > 0 && config.defaultTemplateList) {
+            setEnabledDefaultTemplates(templateList.filter(t => isDefaultTemplateName(t, config)));
           }
         }
       } catch (error) {
@@ -337,21 +337,27 @@ function App() {
 
   // Helper to get the correct asset URL based on environment
   const getAssetUrl = (type, item) => {
+    const isDefault = type === 'template' && isDefaultTemplateName(item, appConfig);
     if (item && typeof item === 'object') {
-      return `${BACKEND_URL}/${type}s/${item.name}?t=${item.timestamp || ''}`;
+      return `${BACKEND_URL}/photos/${item.name}?t=${item.timestamp || ''}`;
     }
-    return `${BACKEND_URL}/${type}s/${item}`;
+    const folder = isDefault ? 'defaults' : `${type}s`;
+    return `${BACKEND_URL}/${folder}/${item}`;
   };
 
   // Number of areas for active template
   const activeTemplateConfig = appConfig[activeTemplate] || {};
-  const availableTemplatesForLive = templates.filter(t => isCustomTemplateName(t) || enabledDefaultTemplates.includes(t));
+  const availableTemplatesForLive = templates.filter(t => isCustomTemplateName(t, appConfig) || enabledDefaultTemplates.includes(t));
   const availableTemplatesKey = availableTemplatesForLive.join('|');
   const requiredPhotos = activeTemplate ? (activeTemplateConfig.areas ? activeTemplateConfig.areas.length : (activeTemplateConfig.x ? 1 : 1)) : 0;
 
   useEffect(() => {
-    if (!availableTemplatesForLive.includes(activeTemplate)) {
+    // If the currently active template is no longer available (e.g., it was disabled),
+    // switch to the first available template.
+    if (activeTemplate && !availableTemplatesForLive.includes(activeTemplate)) {
       setActiveTemplate(availableTemplatesForLive[0] || '');
+    } else if (activeTemplate) {
+      // Otherwise, just reset selections for the new template
       setSelectedPhotos([]);
       setLiveTemplateBoxes([]);
     }
@@ -927,11 +933,12 @@ function App() {
       };
   };
 
-  const handleTemplateUpload = async (event) => {
+  const handleTemplateUpload = async (event, isDefault = false) => {
     const file = event.target.files[0];
     if (!file) return;
 
     const formData = new FormData();
+    formData.append('isDefault', isDefault);
     formData.append('template', file); // This key must match the backend's 'upload.single('template')'
 
     setIsProcessing(true);
@@ -950,6 +957,16 @@ function App() {
       if (templateRes.ok) {
         const templateList = await templateRes.json();
         setTemplates(templateList);
+        if (isDefault) {
+          const newDefaultList = [...(appConfig.defaultTemplateList || []), file.name];
+          const newConfig = { ...appConfig, defaultTemplateList: newDefaultList };
+          await fetch(`${BACKEND_URL}/api/config`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(newConfig),
+          });
+          setAppConfig(newConfig);
+        }
       }
       console.log(`Template '${file.name}' uploaded successfully!`);
     } catch (error) {
@@ -957,6 +974,40 @@ function App() {
     } finally {
       setIsProcessing(false);
       event.target.value = null; // Clear the input so the same file can be uploaded again if needed
+    }
+  };
+
+  const handleDefaultTemplateUpload = async (event) => {
+    handleTemplateUpload(event, true);
+  };
+
+  const handleToggleDefaultTemplate = async (templateName) => {
+    const isCurrentlyEnabled = enabledDefaultTemplates.includes(templateName);
+    const newEnabledList = isCurrentlyEnabled
+      ? enabledDefaultTemplates.filter(t => t !== templateName)
+      : [...enabledDefaultTemplates, templateName];
+
+    setEnabledDefaultTemplates(newEnabledList);
+
+    // Save this change to the backend config
+    try {
+      const newConfig = { ...appConfig, enabledDefaultTemplates: newEnabledList };
+
+      const res = await fetch(`${BACKEND_URL}/api/config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newConfig),
+      });
+
+      if (!res.ok) {
+        throw new Error('Failed to save enabled templates configuration');
+      }
+
+      setAppConfig(newConfig);
+      console.log(`Default template selection updated.`);
+    } catch (error) {
+      console.error("Failed to save configuration.", error);
+      // Optionally revert the state change on error
     }
   };
 
@@ -1064,10 +1115,10 @@ function App() {
     };
   }, [activeTemplate, appConfig, mode, isPreviewMode]);
 
-  const defaultTemplates = templates.filter(t => t.toLowerCase().startsWith('temp_') || t.toLowerCase().startsWith('default_'));
-  const customTemplates = templates.filter(t => !t.toLowerCase().startsWith('temp_') && !t.toLowerCase().startsWith('default_'));
+  const defaultTemplates = templates.filter(t => isDefaultTemplateName(t, appConfig));
+  const customTemplates = templates.filter(t => isCustomTemplateName(t, appConfig));
 
-  const isDefaultTemplate = selectedTemplateForEditing && (selectedTemplateForEditing.toLowerCase().startsWith('temp_') || selectedTemplateForEditing.toLowerCase().startsWith('default_'));
+  const isDefaultTemplate = selectedTemplateForEditing && isDefaultTemplateName(selectedTemplateForEditing, appConfig);
   const isDrawingAllowed = (!isDefaultTemplate && editorTool === 'draw') || (isDefaultTemplate && isDeveloperMode && editorTool === 'draw');
   const isDrawingLocked = !isDrawingAllowed;
 
@@ -1468,8 +1519,8 @@ function App() {
             <div className="controls-container" style={{ justifyContent: 'space-between' }}>
               <div className="control-group" style={{ marginBottom: '0' }}>
                 <label htmlFor="template-select" style={{ alignSelf: 'flex-start', marginBottom: '2px' }}>Active Template:</label>
-                <select id="template-select" value={activeTemplate} onChange={(e) => { setActiveTemplate(e.target.value); setSelectedPhotos([]); setLiveTemplateBoxes([]); }} disabled={templates.length === 0 || isProcessing}>
-                  {templates.length > 0 ? templates.map(t => <option key={t} value={t}>{t}</option>) : <option>No templates found</option>}
+                <select id="template-select" value={activeTemplate} onChange={(e) => setActiveTemplate(e.target.value)} disabled={availableTemplatesForLive.length === 0 || isProcessing}>
+                  {availableTemplatesForLive.length > 0 ? availableTemplatesForLive.map(t => <option key={t} value={t}>{t}</option>) : <option>No templates enabled</option>}
                 </select>
               </div>
 
@@ -2036,15 +2087,27 @@ function App() {
                     </div>
 
                     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', borderLeft: '1px solid var(--border-color)', paddingLeft: '20px' }}>
-                      <h3 style={{ margin: '0 0 10px 0', fontSize: '1rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '5px' }}>Default Templates</h3>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: '5px', marginBottom: '10px' }}>
+                        <h3 style={{ margin: 0, fontSize: '1rem' }}>Default Templates</h3>
+                        {isDeveloperMode && (
+                          <div>
+                            <label htmlFor="default-template-upload" className={`upload-btn ${isProcessing ? 'disabled' : ''}`} style={{fontSize: '0.75rem', padding: '4px 8px'}}>{isProcessing ? '...' : '📂 Upload Default'}</label>
+                            <input type="file" id="default-template-upload" accept="image/png, image/jpeg" onChange={handleDefaultTemplateUpload} disabled={isProcessing} />
+                          </div>
+                        )}
+                      </div>
                       <div className="template-gallery" style={{ flex: 1, overflowY: 'auto', alignContent: 'flex-start' }}>
                         {defaultTemplates.map(template => (
-                          <div key={template} className="template-item">
-                            <div className="template-thumbnail-wrapper" onClick={() => handleSelectTemplateForEditing(template)}>
+                          <div key={template} className={`template-item ${enabledDefaultTemplates.includes(template) ? 'enabled' : ''}`}>
+                            <div className="template-thumbnail-wrapper" onClick={() => handleToggleDefaultTemplate(template)}>
                               <img src={getAssetUrl('template', template)} alt={template} className="template-thumbnail" />
-                              <div className="template-hover-overlay">Edit Template</div>
+                              <div className="template-hover-overlay">{enabledDefaultTemplates.includes(template) ? '✅ Enabled (Click to Disable)' : 'Click to Enable'}</div>
+                              {isDeveloperMode && <button className="delete-template-btn" onClick={(e) => { e.stopPropagation(); handleDeleteTemplate(template); }} title={`Delete ${template}`}>&times;</button>}
                             </div>
-                            <p className="template-name">{template}</p>
+                            <div className="template-actions">
+                                <button className="template-action-btn" onClick={(e) => { e.stopPropagation(); handleSelectTemplateForEditing(template); }} title="Edit Template Text/Effects">✎</button>
+                            </div>
+                            <p className="template-name" onClick={() => handleToggleDefaultTemplate(template)}>{template}</p>
                           </div>
                         ))}
                         {defaultTemplates.length === 0 && <p style={{ color: 'var(--text-muted)' }}>No default templates found.</p>}
@@ -2058,6 +2121,11 @@ function App() {
           </div>
         </main>
       )}
+
+      <style>{`
+        .template-item.enabled .template-thumbnail { border: 3px solid var(--btn-primary); }
+        .template-item.enabled .template-name { color: var(--btn-primary); font-weight: bold; }
+      `}</style>
 
       {showFolderModal && (
         <div className="modal-overlay" onClick={() => setShowFolderModal(false)}>
@@ -2099,43 +2167,53 @@ function App() {
         <div className="modal-overlay" onClick={() => setShowInstructions(false)}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '800px', maxHeight: '80vh', overflowY: 'auto' }}>
             <h2>How to Use the Photo Booth System</h2>
-            <ol>
+            <ol style={{ paddingLeft: '20px' }}>
               <li>
-                <strong>System Setup (First Time Only):</strong>
-                <ul>
-                  <li>Go to "Template Setup" mode.</li>
-                  <li>In the "System Configuration" section, provide the full path to the folder where your camera saves new photos.</li>
-                  <li>You can paste the path (e.g., `C:\Users\YourName\Pictures\PhotoBooth`) and click "Set Watch Folder".</li>
-                  <li><strong>Note:</strong> The "Browse..." button will only work in the final installed application (`.exe`), not in the development browser.</li>
+                <strong>System Setup (First Time):</strong>
+                <ul style={{ paddingLeft: '20px' }}>
+                  <li>Click the <strong>Settings (⚙️)</strong> icon in the top-right corner.</li>
+                  <li>In the "System Configuration" section, set the folder where your camera saves photos. You can paste the path (e.g., `C:\Photos\Booth`) or use the "Browse..." button.</li>
+                  <li>Click <strong>"Set Watch Folder"</strong> to save. The system will now automatically detect new photos in that folder.</li>
                 </ul>
               </li>
               <li>
-                <strong>Template Setup:</strong>
-                <ul>
-                  <li>Switch to "Template Setup" mode.</li>
-                  <li>Select a template from the gallery or upload a new one.</li>
-                  <li>Click and drag your mouse over the template image to draw up to <strong>4 selection boxes</strong> in the exact order you want the photos to appear.</li>
-                  <li>Click "Save Configuration".</li>
+                <strong>Template Management (in Settings):</strong>
+                <ul style={{ paddingLeft: '20px' }}>
+                  <li><strong>Upload:</strong> In the "My Templates" section, click "Browse..." to upload your own PNG or JPG template files.</li>
+                  <li><strong>Edit:</strong> Click on any template (either "My Templates" or "Default Templates") to open the editor.</li>
+                  <li><strong>Delete:</strong> Hover over a custom template and click the red '×' button to delete it. Default templates cannot be deleted.</li>
+                </ul>
+              </li>
+              <li>
+                <strong>Template Editor:</strong>
+                <ul style={{ paddingLeft: '20px' }}>
+                  <li><strong>Photo Areas:</strong> For custom templates, click and drag to draw rectangles where guest photos should appear. The numbers (1, 2, 3...) show the order. Use "Clear Areas" to start over.</li>
+                  <li><strong>Add Text:</strong> Click "+ Add Text" to create a new text element.</li>
+                  <li><strong>Edit Text:</strong> Click on a text element on the image to select it. The sidebar will show all editing options. You can also double-click the text on the image to edit its content directly.</li>
+                  <li><strong>Text Styling:</strong> Use the "Format" and "Effects" tabs in the sidebar to change fonts, colors, sizes, add shadows, glows, outlines, and more.</li>
+                  <li><strong>Save Changes:</strong> Click the "💾 Save" button in the toolbar to save all your area and text changes for that template.</li>
                 </ul>
               </li>
               <li>
                 <strong>Live Booth Operation:</strong>
-                <ul>
-                  <li>Switch to "Live Booth" mode and choose an "Active Template".</li>
-                  <li>Take photos with your camera. They will instantly appear in the thumbnails row.</li>
-                  <li>Click on the photos to <strong>select them in order</strong>. You must select the exact number of photos required by the template.</li>
-                  <li>Use the "🗑️ Delete" button (or the 'x' on thumbnails) to permanently remove bad photos.</li>
-                  <li>Click "Approve & Preview Card" once the required photos are selected.</li>
+                <ul style={{ paddingLeft: '20px' }}>
+                  <li>Click the <strong>Live Booth (🖥️)</strong> icon to go to the main screen.</li>
+                  <li>Use the "Active Template" dropdown to select your desired template. The preview below will show the layout.</li>
+                  <li>As you take photos, they will appear in the left-hand column. Click a thumbnail to view it larger.</li>
+                  <li>Use the <strong>✅ Select</strong> button to add a photo to your final design. The selected photos will appear in the template preview on the right.</li>
+                  <li>You must select the exact number of photos required by the template.</li>
+                  <li>Use the <strong>🗑️ Delete</strong> button to permanently remove a bad photo from the system.</li>
+                  <li>Once all photo slots are filled, a <strong>"Proceed"</strong> button will appear. Click it to go to the final step.</li>
                 </ul>
               </li>
               <li>
                 <strong>Final Preview & Finalize:</strong>
-                <ul>
-                  <li><strong>Adjust:</strong> Click and drag the guest photos in the preview to adjust their positions inside the frames.</li>
+                <ul style={{ paddingLeft: '20px' }}>
+                  <li><strong>Adjust Position:</strong> In the final preview, you can click and drag each guest photo within its frame to get the perfect position.</li>
                   <li><strong>Print:</strong> Enter the number of copies and click "Print Now".</li>
-                  <li><strong>Email:</strong> Enter a guest's email and click "Send Email" (This will also prompt you to save a local backup).</li>
+                  <li><strong>Email:</strong> Enter a guest's email and click "Send Email". This will also prompt you to save a local copy of the final image.</li>
                   <li><strong>Save:</strong> Click "Save as JPG..." to manually download the image.</li>
-                  <li><strong>Navigation:</strong> Use the top-left <strong>⬅ Back</strong> arrow to return to selection mode without losing photos, or <strong>❌ Reject</strong> to clear the session and start over.</li>
+                  <li><strong>Navigation:</strong> Use the top-left <strong>⬅ Back</strong> arrow to return to the photo selection screen without losing your choices. Click <strong>❌ Reject</strong> to clear everything and start a new session.</li>
                 </ul>
               </li>
             </ol>
