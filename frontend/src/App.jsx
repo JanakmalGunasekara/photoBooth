@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import './App.css';
+import { supabase } from './supabaseClient';
+import Auth from './Auth';
 
 const BACKEND_URL = 'http://localhost:5000'; // Define your backend URL
 
@@ -116,6 +118,7 @@ const getTextStyleOptions = (t, scale = 1) => {
 };
 
 function App() {
+  const [session, setSession] = useState(null);
   const isDefaultTemplateName = (name, config) => (config.defaultTemplateList || []).includes(name);
   const isCustomTemplateName = (name, config) => !isDefaultTemplateName(name, config);
 
@@ -187,6 +190,19 @@ function App() {
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', isDarkMode ? 'dark' : 'light');
   }, [isDarkMode]);
+
+  // --- Auth State Change Listener ---
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
 
   // --- Main Effect Hook ---
   useEffect(() => {
@@ -266,7 +282,7 @@ function App() {
     return () => {
       clearInterval(intervalId);
     };
-  }, [mode]); // Re-run effect if mode changes to fetch config
+  }, [mode, session]); // Re-run effect if mode or session changes
 
   // --- Global Drag & Resize Handlers for Interactive Preview ---
   useEffect(() => {
@@ -1129,8 +1145,13 @@ function App() {
     }
   }, [selectedTemplateForEditing, isDefaultTemplate, isDeveloperMode]);
 
+  if (!session) {
+    return <Auth />;
+  }
+
   // --- Main Render ---
   return (
+    
     <div className="dashboard">
       <datalist id="font-size-list">
         {WORD_SIZES.map(s => <option key={s} value={s} />)}
@@ -1293,6 +1314,9 @@ function App() {
           <div className="settings-icon" onClick={() => setMode(prev => prev === 'live' ? 'setup' : 'live')} title={mode === 'live' ? 'Go to Settings' : 'Back to Live Booth'}>
             {mode === 'live' ? '⚙️' : '🖥️'}
           </div>
+          <button onClick={() => supabase.auth.signOut()} className="secondary-btn" style={{padding: '4px 10px', marginLeft: '10px'}}>
+            Logout
+          </button>
         </div>
       </header>
 
