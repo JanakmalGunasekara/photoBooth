@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import './App.css';
 import { supabase } from './supabaseClient';
 import Auth from './Auth';
+import UpdatePassword from './UpdatePassword';
+import photoboothLogo from './assets/photoboothlogo.png';
 
 const BACKEND_URL = 'http://localhost:5000'; // Define your backend URL
 
@@ -119,6 +121,7 @@ const getTextStyleOptions = (t, scale = 1) => {
 
 function App() {
   const [session, setSession] = useState(null);
+  const [isPasswordRecovery, setIsPasswordRecovery] = useState(false);
   const isDefaultTemplateName = (name, config) => (config.defaultTemplateList || []).includes(name);
   const isCustomTemplateName = (name, config) => !isDefaultTemplateName(name, config);
 
@@ -186,6 +189,16 @@ function App() {
   const [activeEditorTab, setActiveEditorTab] = useState('format'); // 'format', 'effects'
   const [expandedEffect, setExpandedEffect] = useState(null);
   const [editorTool, setEditorTool] = useState('move'); // 'move' or 'draw'
+  const [isTextDragging, setIsTextDragging] = useState(false);
+  const [showGridLines, setShowGridLines] = useState(true);
+  const [snapLines, setSnapLines] = useState([]);
+  const [distanceLines, setDistanceLines] = useState([]);
+  const [contextMenu, setContextMenu] = useState({
+    visible: false,
+    x: 0,
+    y: 0,
+    itemIndex: null,
+  });
   // --- Theme Effect ---
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', isDarkMode ? 'dark' : 'light');
@@ -198,6 +211,9 @@ function App() {
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (_event === 'PASSWORD_RECOVERY') {
+        setIsPasswordRecovery(true);
+      }
       setSession(session);
     });
 
@@ -600,6 +616,29 @@ function App() {
     setSelectedTextIndex(newIdx);
   };
 
+  const handleDuplicateText = (index) => {
+    if (index === null || !setupTexts[index]) return;
+    const originalText = setupTexts[index];
+    const newText = {
+      ...JSON.parse(JSON.stringify(originalText)), // Deep copy
+      id: `text_${Date.now()}`,
+      x: originalText.x + 20, // Offset the new text
+      y: originalText.y + 20,
+    };
+    const newIndex = setupTexts.length;
+    setSetupTexts(prev => [...prev, newText]);
+    setSelectedTextIndex(newIndex);
+  };
+
+  const handleTextContextMenu = (e, index) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setSelectedTextIndex(index);
+    setContextMenu({
+      visible: true, x: e.clientX, y: e.clientY, itemIndex: index
+    });
+  };
+
   const handleRemoveText = (index) => {
       setSetupTexts(prev => prev.filter((_, i) => i !== index));
       if (selectedTextIndex === index) {
@@ -746,31 +785,119 @@ function App() {
       const offsetY = t.y - mouseY;
 
       textDragRef.current = { isDragging: true, index, offsetX, offsetY };
-
-      const handleDragEnd = (endEvent) => {
-          if (!textDragRef.current.isDragging || textDragRef.current.index !== index) return;
-
+      setIsTextDragging(true);
+      
+      const handleTextDragMove = (moveEvent) => {
+          if (!textDragRef.current.isDragging) return;
+          
           const img = templateImageRef.current;
           const rect = img.getBoundingClientRect();
           const scaleX = setupTemplateDims.width / rect.width;
           const scaleY = setupTemplateDims.height / rect.height;
           
-          const mouseX = (endEvent.clientX - rect.left) * scaleX;
-          const mouseY = (endEvent.clientY - rect.top) * scaleY;
+          let newX = ((moveEvent.clientX - rect.left) * scaleX) + textDragRef.current.offsetX;
+          let newY = ((moveEvent.clientY - rect.top) * scaleY) + textDragRef.current.offsetY;
 
-          const finalX = mouseX + textDragRef.current.offsetX;
-          const finalY = mouseY + textDragRef.current.offsetY;
+          // --- Snapping Logic ---
+          const newSnapLines = [];
+          const newDistanceLines = [];
+          if (showGridLines) {
+              const SNAP_THRESHOLD = 5 / editorZoom; // 5px threshold, adjusted for zoom
+              const draggingElem = document.getElementById(`setup-text-${index}`);
+              if (draggingElem) {
+                  const draggingRect = draggingElem.getBoundingClientRect();
+                  const draggingWidth = draggingRect.width * scaleX;
+                  const draggingHeight = draggingRect.height * scaleY;
+
+                  const draggingBounds = {
+                      left: newX - (t.textAlign === 'center' ? draggingWidth / 2 : (t.textAlign === 'right' ? draggingWidth : 0)),
+                      top: newY - (draggingHeight / 2),
+                      right: newX + (t.textAlign === 'center' ? draggingWidth / 2 : (t.textAlign === 'left' ? draggingWidth : 0)),
+                      bottom: newY + (draggingHeight / 2),
+                      centerX: newX,
+                      centerY: newY
+                  };
+
+                  // Center of template
+                  const templateCenterX = setupTemplateDims.width / 2;
+                  const templateCenterY = setupTemplateDims.height / 2;
+
+                  if (Math.abs(draggingBounds.centerX - templateCenterX) < SNAP_THRESHOLD) {
+                      newX = templateCenterX;
+                      newSnapLines.push({ type: 'vertical', position: templateCenterX });
+                  }
+                  if (Math.abs(draggingBounds.centerY - templateCenterY) < SNAP_THRESHOLD) {
+                      newY = templateCenterY;
+                      newSnapLines.push({ type: 'horizontal', position: templateCenterY });
+                  }
+
+                  // Other text elements
+                  setupTexts.forEach((otherText, otherIndex) => {
+                      if (index === otherIndex) return;
+                      const otherElem = document.getElementById(`setup-text-${otherIndex}`);
+                      if (!otherElem) return;
+
+                      const otherRect = otherElem.getBoundingClientRect();
+                      const otherWidth = otherRect.width * scaleX;
+                      const otherHeight = otherRect.height * scaleY;
+                      const otherBounds = {
+                          left: otherText.x - (otherText.textAlign === 'center' ? otherWidth / 2 : (otherText.textAlign === 'right' ? otherWidth : 0)),
+                          top: otherText.y - otherHeight / 2,
+                          right: otherText.x + (otherText.textAlign === 'center' ? otherWidth / 2 : (otherText.textAlign === 'left' ? otherWidth : 0)),
+                          bottom: otherText.y + otherHeight / 2,
+                          centerX: otherText.x,
+                          centerY: otherText.y
+                      };
+
+                      // Compare centers
+                      if (Math.abs(draggingBounds.centerX - otherBounds.centerX) < SNAP_THRESHOLD) {
+                          newX = otherBounds.centerX;
+                          newSnapLines.push({ type: 'vertical', position: otherBounds.centerX });
+                      }
+                      if (Math.abs(draggingBounds.centerY - otherBounds.centerY) < SNAP_THRESHOLD) {
+                          newY = otherBounds.centerY;
+                          newSnapLines.push({ type: 'horizontal', position: otherBounds.centerY });
+                      }
+
+                      // Distance lines
+                      const yDist = Math.abs(draggingBounds.top - otherBounds.bottom);
+                      if (yDist < SNAP_THRESHOLD * 4 && yDist > 0.1) {
+                          newDistanceLines.push({ type: 'vertical', start: otherBounds.bottom, end: draggingBounds.top, x: draggingBounds.centerX, dist: yDist });
+                      }
+                      const xDist = Math.abs(draggingBounds.left - otherBounds.right);
+                       if (xDist < SNAP_THRESHOLD * 4 && xDist > 0.1) {
+                          newDistanceLines.push({ type: 'horizontal', start: otherBounds.right, end: draggingBounds.left, y: draggingBounds.centerY, dist: xDist });
+                      }
+                  });
+              }
+          }
+          setSnapLines(newSnapLines);
+          setDistanceLines(newDistanceLines);
+
+          // Constrain dragging within the template boundaries
+          newX = Math.max(0, Math.min(newX, setupTemplateDims.width));
+          newY = Math.max(0, Math.min(newY, setupTemplateDims.height));
 
           setSetupTexts(prev => {
               const updated = [...prev];
-              if (updated[index]) updated[index] = { ...updated[index], x: finalX, y: finalY };
+              if (updated[index]) {
+                  updated[index] = { ...updated[index], x: newX, y: newY };
+              }
               return updated;
           });
-          
-          textDragRef.current.isDragging = false;
-          window.removeEventListener('mouseup', handleDragEnd);
       };
-      window.addEventListener('mouseup', handleDragEnd);
+
+      const handleTextDragEnd = () => {
+          textDragRef.current.isDragging = false;
+          setIsTextDragging(false);
+          setDistanceLines([]);
+          setSnapLines([]); // Clear lines on mouse up
+          window.removeEventListener('mousemove', handleTextDragMove);
+          window.removeEventListener('mouseup', handleTextDragEnd);
+      };
+          
+      window.addEventListener('mousemove', handleTextDragMove);
+      window.addEventListener('mouseup', handleTextDragEnd);
   };
   // --- Template Setup Mode Handlers ---
   const getCoords = (e) => {
@@ -868,16 +995,14 @@ function App() {
   };
 
   const handleSaveConfig = async () => {
-    if (selectionBoxes.length === 0) {
-      console.warn("Please draw at least one selection box on the template.");
-      return;
-    }
-
     const realCoordsArray = selectionBoxes;
 
     try {
       const newConfig = { ...appConfig };
-      newConfig[selectedTemplateForEditing] = { areas: realCoordsArray };
+      if (!newConfig[selectedTemplateForEditing]) {
+        newConfig[selectedTemplateForEditing] = {};
+      }
+      newConfig[selectedTemplateForEditing].areas = realCoordsArray;
       if (setupTexts && setupTexts.length > 0) {
           newConfig[selectedTemplateForEditing].texts = setupTexts;
       }
@@ -1145,6 +1270,24 @@ function App() {
     }
   }, [selectedTemplateForEditing, isDefaultTemplate, isDeveloperMode]);
 
+  // --- Context Menu Close Handler ---
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (contextMenu.visible) {
+        setContextMenu({ visible: false, x: 0, y: 0, itemIndex: null });
+      }
+    };
+
+    window.addEventListener('click', handleClickOutside);
+    return () => {
+      window.removeEventListener('click', handleClickOutside);
+    };
+  }, [contextMenu.visible]);
+
+  if (isPasswordRecovery) {
+    return <UpdatePassword />;
+  }
+
   if (!session) {
     return <Auth />;
   }
@@ -1290,7 +1433,7 @@ function App() {
         `}</style>
 
       <header className="header">
-        <h1 
+        <div 
           onClick={() => {
             const newClicks = headerClicks + 1;
             setHeaderClicks(newClicks);
@@ -1299,11 +1442,12 @@ function App() {
               setHeaderClicks(0);
             }
           }}
-          style={{ cursor: 'pointer', userSelect: 'none' }}
+          style={{ cursor: 'pointer', userSelect: 'none', display: 'flex', alignItems: 'center', gap: '15px' }}
           title="Click 5 times to toggle Developer Mode"
         >
-          Photo Booth Dashboard {isDeveloperMode && <span style={{ fontSize: '0.8rem', color: 'red', verticalAlign: 'middle', marginLeft: '10px' }}>(DEV MODE)</span>}
-        </h1>
+          <img src={photoboothLogo} alt="Photo Booth Logo" className="header-logo" />
+          {isDeveloperMode && <span style={{ fontSize: '0.8rem', color: 'red', verticalAlign: 'middle' }}>(DEV MODE)</span>}
+        </div>
         <div className="header-actions">
           <div className="theme-toggle" onClick={() => setIsDarkMode(!isDarkMode)} title={isDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}>
             {isDarkMode ? '☀️' : '🌙'}
@@ -1683,7 +1827,7 @@ function App() {
                                   return (
                                       <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', border: '1px solid var(--border-color)', padding: '15px', borderRadius: '8px', background: 'var(--item-bg)' }}>
                                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                              <strong style={{ fontSize: '0.9rem', color: 'var(--accent-pink)' }}>Selected Text Settings</strong>
+                                              <strong style={{ fontSize: '0.9rem', color: 'var(--accent-pink)' }}>Selected Text</strong>
                                               <button onClick={() => handleRemoveText(i)} title="Delete Text" style={{ background: 'var(--btn-danger)', color: 'white', border: 'none', borderRadius: '4px', padding: '4px 8px', fontSize: '12px', cursor: 'pointer' }}>Delete</button>
                                           </div>
                                           
@@ -1855,7 +1999,7 @@ function App() {
                                                           { id: 'hollow', name: 'Hollow', style: { WebkitTextStroke: '1px #888', WebkitTextFillColor: 'transparent', color: 'transparent' } },
                                                           { id: 'splice', name: 'Splice', style: { WebkitTextStroke: '1px #888', WebkitTextFillColor: 'transparent', textShadow: '3px 3px 0px #555', color: 'transparent' } },
                                                           { id: 'neon', name: 'Neon', style: { color: '#fff', textShadow: '0 0 5px #fff, 0 0 10px #f0f' } },
-                                                          { id: 'glitch', name: 'Glitch', style: { textShadow: '2px 0 0 cyan, -2px 0 0 red' } },
+                                                          { id: 'glitch', name: 'Glitch', style: { textShadow: '1px 0 0 cyan, -1px 0 0 red' } },
                                                           { id: 'background', name: 'Bg', style: { background: '#ff0', padding: '2px 5px', borderRadius: '4px', color: '#000' } }
                                                       ].map(ef => (
                                                           <div 
@@ -1863,7 +2007,7 @@ function App() {
                                                               onClick={() => {
                                                                   handleEffectChange(i, ef.id, 'enabled', !effs[ef.id]?.enabled);
                                                                   if (expandedEffect === ef.id && effs[ef.id]?.enabled) {
-                                                                      setExpandedEffect(null); // Collapse if deselecting the currently expanded one
+                                                                      setExpandedEffect(null);
                                                                   } else {
                                                                       setExpandedEffect(ef.id);
                                                                   }
@@ -1955,11 +2099,16 @@ function App() {
                             />
                             <span style={{ fontSize: '0.9rem', width: '40px', textAlign: 'right' }}>{Math.round(editorZoom * 100)}%</span>
                         </div>
+                        <div style={{display: 'flex', alignItems: 'center', gap: '5px'}}>
+                            <input type="checkbox" id="grid-lines-toggle" checked={showGridLines} onChange={(e) => setShowGridLines(e.target.checked)} />
+                            <label htmlFor="grid-lines-toggle" style={{fontSize: '0.8rem', userSelect: 'none', cursor: 'pointer'}}>Grid Lines</label>
+                        </div>
                     </div>
                     <button onClick={handleSaveConfig} className="save-config-btn" style={{ padding: '4px 12px' }}>💾 Save</button>
                   </div>
-                    <div className="workspace-canvas" onMouseMove={editorTool === 'draw' ? handleMouseMove : undefined} onMouseUp={editorTool === 'draw' ? handleMouseUp : undefined} onMouseLeave={editorTool === 'draw' ? handleMouseUp : undefined}>
+                    <div className={`workspace-canvas ${showGridLines || isTextDragging ? 'grid-lines-active' : ''}`} onMouseMove={editorTool === 'draw' ? handleMouseMove : undefined} onMouseUp={editorTool === 'draw' ? handleMouseUp : undefined} onMouseLeave={editorTool === 'draw' ? handleMouseUp : undefined}>
                       <div style={{ position: 'relative', display: 'inline-block', width: `${setupTemplateDims.width * editorZoom}px`, height: `${setupTemplateDims.height * editorZoom}px`, textAlign: 'left', verticalAlign: 'top', overflow: 'visible' }} onMouseDown={(e) => { setSelectedTextIndex(null); if (isDrawingAllowed) handleMouseDown(e); }}>
+                        <div className="workspace-canvas-grid-bg"></div>
                         <div style={{ position: 'relative', width: `${setupTemplateDims.width}px`, height: `${setupTemplateDims.height}px`, transform: `scale(${editorZoom})`, transformOrigin: 'top left' }}>
                           <img 
                             ref={templateImageRef} 
@@ -2027,6 +2176,7 @@ function App() {
                                       zIndex: 100 + idx
                                   }}
                                   onMouseDown={(e) => handleTextDragStart(e, idx)}
+                                  onContextMenu={(e) => handleTextContextMenu(e, idx)}
                                   onDoubleClick={(e) => {
                                       e.stopPropagation();
                                       e.target.contentEditable = true;
@@ -2084,7 +2234,11 @@ function App() {
                   <div style={{ display: 'flex', gap: '20px', flex: 1, minHeight: 0, overflow: 'hidden' }}>
                     
                     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-                      <h3 style={{ margin: '0 0 10px 0', fontSize: '1rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '5px' }}>My Templates</h3>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: '5px', marginBottom: '10px' }}>
+                        <h3 style={{ margin: 0, fontSize: '1rem' }}>My Templates</h3>
+                        <label htmlFor="template-upload" className={`upload-btn ${isProcessing ? 'disabled' : ''}`}>{isProcessing ? 'Uploading...' : '📂 Browse...'}</label>
+                        <input type="file" id="template-upload" accept="image/png, image/jpeg" onChange={handleTemplateUpload} disabled={isProcessing} />
+                      </div>
                       <div className="template-gallery" style={{ flex: 1, overflowY: 'auto', alignContent: 'flex-start' }}>
                         {customTemplates.map(template => (
                           <div key={template} className="template-item">
@@ -2103,11 +2257,6 @@ function App() {
                         ))}
                         {customTemplates.length === 0 && <p style={{ color: 'var(--text-muted)' }}>No custom templates uploaded.</p>}
                       </div>
-                      <div className="upload-container" style={{ borderTop: '1px solid var(--border-color)', paddingTop: '15px', marginTop: '10px' }}>
-                        <h3>Upload New Template</h3>
-                        <label htmlFor="template-upload" className={`upload-btn ${isProcessing ? 'disabled' : ''}`}>{isProcessing ? 'Uploading...' : '📂 Browse...'}</label>
-                        <input type="file" id="template-upload" accept="image/png, image/jpeg" onChange={handleTemplateUpload} disabled={isProcessing} />
-                      </div>
                     </div>
 
                     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', borderLeft: '1px solid var(--border-color)', paddingLeft: '20px' }}>
@@ -2115,7 +2264,7 @@ function App() {
                         <h3 style={{ margin: 0, fontSize: '1rem' }}>Default Templates</h3>
                         {isDeveloperMode && (
                           <div>
-                            <label htmlFor="default-template-upload" className={`upload-btn ${isProcessing ? 'disabled' : ''}`} style={{fontSize: '0.75rem', padding: '4px 8px'}}>{isProcessing ? '...' : '📂 Upload Default'}</label>
+                            <label htmlFor="default-template-upload" className={`upload-btn ${isProcessing ? 'disabled' : ''}`} style={{fontSize: '0.75rem', padding: '4px 8px'}}>{isProcessing ? '...' : '📂 Browse...'}</label>
                             <input type="file" id="default-template-upload" accept="image/png, image/jpeg" onChange={handleDefaultTemplateUpload} disabled={isProcessing} />
                           </div>
                         )}
@@ -2243,6 +2392,20 @@ function App() {
             </ol>
             <button onClick={() => setShowInstructions(false)} className="secondary-btn">Close</button>
           </div>
+        </div>
+      )}
+
+      {/* --- Global Context Menu --- */}
+      {contextMenu.visible && (
+        <div className="context-menu" style={{ top: contextMenu.y, left: contextMenu.x }}>
+          <ul>
+            <li onClick={() => {
+              handleDuplicateText(contextMenu.itemIndex);
+              setContextMenu({ visible: false, x: 0, y: 0, itemIndex: null });
+            }}>
+              Duplicate Text
+            </li>
+          </ul>
         </div>
       )}
     </div>

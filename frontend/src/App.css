@@ -86,6 +86,14 @@ body {
   margin-bottom: 0.5rem;
 }
 
+.header-logo {
+  height: 75px;
+  filter: drop-shadow(0 4px 8px rgba(0,0,0,0.3));
+  transition: transform 0.3s ease;
+}
+.header-logo:hover {
+  transform: scale(1.05);
+}
 .help-icon {
   width: 36px;
   height: 36px;
@@ -154,28 +162,28 @@ body {
 
 .main-content {
     display: grid;
-    grid-template-columns: 2fr 1fr;
-    gap: 2rem;
-    margin-top: 2rem;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem;
+    margin-top: 0.8rem;
 }
 
 .preview-container, .controls-container, .setup-container {
   background-color: var(--panel-bg);
-  border: 1px solid var(--border-color);
+  border: 0.5px solid var(--border-color);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-md);
-  padding: 2rem;
+  padding: 0.5rem;
 }
 
 .preview-container h2, .controls-container h2, .setup-container h2 {
-    margin-top: 0;
-  font-weight: 700;
+  margin-top: 0;
+  font-weight: 500;
   letter-spacing: 0.5px;
   color: var(--text-main);
 }
 
 .upload-container h3 {
-  font-weight: 600;
+  font-weight: 300;
   color: var(--text-main);
   margin-bottom: 0.5rem;
 }
@@ -193,7 +201,7 @@ body {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 2rem;
+  gap: 1rem;
 }
 
 .control-group {
@@ -209,13 +217,13 @@ body {
 
 .control-group select {
   padding: 0.5em 0.8em;
-  border-radius: 8px;
+  border-radius: 6px;
   background-color: var(--input-bg);
   color: var(--text-main);
   border: 1px solid var(--border-color);
   min-width: 100%;
   width: 100%;
-  font-size: 0.9rem;
+  font-size: 0.5rem;
   transition: border-color 0.3s;
 }
 
@@ -300,7 +308,7 @@ button:active:not(:disabled) { transform: translateY(0); }
   position: relative;
   display: inline-block;
   cursor: crosshair;
-  margin-top: 1rem;
+  margin-top: 0.5rem;
 }
 
 .template-editor img {
@@ -331,7 +339,7 @@ button:active:not(:disabled) { transform: translateY(0); }
   grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
   gap: 1.5rem;
   width: 100%;
-  margin-bottom: 2rem;
+  margin-bottom: 0;
   padding: 1rem;
 }
 
@@ -435,8 +443,8 @@ button:active:not(:disabled) { transform: translateY(0); }
   max-width: 400px;
 }
 
-.upload-container input[type="file"] {
-  display: none; /* Hide the default file input */
+input[type="file"]#template-upload, input[type="file"]#default-template-upload {
+    display: none;
 }
 
 .upload-btn {
@@ -558,60 +566,148 @@ button:active:not(:disabled) { transform: translateY(0); }
 
 .auth-container {
   width: 100vw;
-  height: 100vh;
+  height: 95vh; /* Use full viewport height */
   display: flex;
   align-items: center;
   flex-direction: column; /* Stack items vertically */
   justify-content: center;
-  background: var(--bg-main, #0f0f11) radial-gradient(circle at top left, rgba(255, 154, 158, 0.12), transparent 45%);
+  background: var(--bg-main);
   overflow: hidden;
   position: relative;
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
 }
 
+/* New Auth Card Layout */
+.auth-card {
+  display: flex;
+  width: 90%;
+  max-width: 900px;
+  max-height: 95vh; /* Constrain max height to prevent overflow */
+  overflow-y: auto; /* Allow internal scrolling if content is too tall */
+  min-height: auto;
+  background-color: var(--panel-bg);
+  border-radius: var(--radius-lg, 24px);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+  border: 1px solid var(--border-color);
+}
+
+.auth-image-column {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden; /* Ensure image doesn't spill out */
+}
+
+.auth-image-column img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover; /* This will fill the container, cropping if necessary */
+}
+
+.auth-form-column {
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 1.5rem 2rem; /* Reduce vertical padding */
+}
+
 /* Glassmorphic Form Container */
 .auth-form-container {
   width: 100%;
-  max-width: 400px;
-  padding: 1.4rem 1.8rem;
-  background-color: color-mix(in srgb, var(--panel-bg, #16161a) 80%, transparent);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid color-mix(in srgb, var(--border-color, #2a2a32) 40%, rgba(255, 255, 255, 0.1));
-  border-radius: var(--radius-lg, 16px);
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.3), 
-              0 1px 3px rgba(255, 255, 255, 0.05) inset;
+  max-width: 380px;
+  padding: 0;
+  background-color: transparent;
+  border: none;
+  box-shadow: none;
   text-align: center;
-  transition: transform 0.3s ease, box-shadow 0.3s ease;
 }
 
-.auth-form-container:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.4), 
-              0 1px 3px rgba(255, 255, 255, 0.08) inset;
+.auth-logo {
+  height: 80px;
+  margin-bottom: 0.005rem;
+  animation: float-effect 4s ease-in-out infinite;
+  filter: drop-shadow(0 3px 10px rgba(0,0,0,0.2));
+}
+
+@keyframes float-effect {
+  0% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+  100% {
+    transform: translateY(0px);
+  }
 }
 
 /* Typography */
 .auth-form-container .header {
-  font-size: 2.1rem;
+  font-size: 1.5rem;
   font-weight: 800;
   letter-spacing: -0.025em;
-  margin-bottom: 0.4rem;
-  margin-top: 0.2rem;
-  background: var(--header-gradient);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
+  margin-bottom: 0.01rem;
+  margin-top: 0.005rem;
+  color: var(--text-main);
 }
 
 .auth-form-container .description {
   color: var(--text-muted, #9a9a86);
-  font-size: 0.95rem;
-  margin-bottom: 1.5rem;
+  font-size: 0.9rem;
+  margin-bottom: 0.8rem;
+}
+
+.social-signup-container {
+  margin-bottom: 0.1rem;
+}
+
+.google-btn {
+  width: 100%;
+  padding: 0.35rem;
+  font-size: 0.8rem;
+  font-weight: 400;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background-color: var(--input-bg);
+  color: var(--text-main);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.google-btn:hover:not(:disabled) {
+  background-color: var(--border-color);
+}
+
+.divider {
+  display: flex;
+  align-items: center;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  margin: 0.4rem 0;
+}
+
+.divider::before,
+.divider::after {
+  content: '';
+  flex: 1;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.divider span {
+  padding: 0 8px;
 }
 
 /* Input Fields & Groups */
 .auth-form-container .input-group {
-  margin-bottom: 1.0rem;
+  margin-bottom: 0.5rem;
   position: relative;
   display: flex;
   flex-direction: column;
@@ -619,15 +715,15 @@ button:active:not(:disabled) { transform: translateY(0); }
 }
 
 .auth-form-container .input-group label {
-  font-size: 0.85rem;
-  font-weight: 500;
+  font-size: 0.75rem;
+  font-weight: 300;
   margin-bottom: 0.3rem;
 }
 
 .auth-form-container .input-field {
   width: 100%;
-  padding:  0.4rem;
-  font-size: 0.9rem;
+  padding: 0.6rem;
+  font-size: 0.65rem;
   border-radius: 10px;
   background-color: var(--input-bg, #1f1f24);
   color: var(--text-main, #ffffff);
@@ -636,6 +732,11 @@ button:active:not(:disabled) { transform: translateY(0); }
   outline: none;
   transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
+
+.auth-form-container .input-field[type="password"] {
+  padding-right: 40px; /* Make space for the icon */
+}
+
 
 .auth-form-container .input-field::placeholder {
   color: color-mix(in srgb, var(--text-muted, #9a9a86) 50%, transparent);
@@ -647,6 +748,35 @@ button:active:not(:disabled) { transform: translateY(0); }
   box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent-pink, #ff9a9e) 15%, transparent);
 }
 
+.password-toggle-icon {
+  position: absolute;
+  right: 12px;
+  top: 30px; /* Adjust this value to vertically center the icon */
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 1.2rem;
+  user-select: none;
+  transition: color 0.2s;
+}
+
+.password-toggle-icon:hover {
+  color: var(--text-main);
+}
+
+.forgot-password-link {
+  text-align: right;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-top: -0.5rem;
+  margin-bottom: 1rem;
+  cursor: pointer;
+}
+
+.forgot-password-link:hover {
+  color: var(--accent-pink);
+  text-decoration: underline;
+}
+
 /* Premium Primary Button */
 .auth-form-container .button-primary {
   width: 100%;
@@ -655,7 +785,7 @@ button:active:not(:disabled) { transform: translateY(0); }
   font-weight: 600;
   border-radius: 10px;
   border: none;
-  background: linear-gradient(135deg, var(--btn-primary, #ff9a9e) 0%, color-mix(in srgb, var(--btn-primary, #ff9a9e) 85%, #000) 100%);
+  background: linear-gradient(135deg, #333 0%, #000 100%);
   color: white;
   cursor: pointer;
   box-shadow: 0 4px 15px color-mix(in srgb, var(--btn-primary, #ff9a9e) 25%, transparent);
@@ -664,8 +794,8 @@ button:active:not(:disabled) { transform: translateY(0); }
 
 .auth-form-container .button-primary:hover:not(:disabled) {
   transform: translateY(-1px);
-  box-shadow: 0 6px 22px color-mix(in srgb, var(--btn-primary, #ff9a9e) 35%, transparent);
-  filter: brightness(1.05);
+  box-shadow: 0 6px 22px rgba(0,0,0,0.4);
+  filter: brightness(1.1);
 }
 
 .auth-form-container .button-primary:active:not(:disabled) {
@@ -680,8 +810,8 @@ button:active:not(:disabled) { transform: translateY(0); }
 }
 
 /* Toggle Link */
-.auth-form-container .toggle-auth {
-  margin-top: 1.5rem;
+.toggle-auth {
+  margin-top: 1.2rem;
   font-size: 0.9rem;
   color: var(--text-muted, #9a9a86);
   letter-spacing: 0.01em;
@@ -701,13 +831,6 @@ button:active:not(:disabled) { transform: translateY(0); }
   text-decoration: underline;
 }
 
-.toggle-auth {
-  margin-top: 1.5rem;
-  font-size: 0.9rem;
-  color: var(--text-muted, #9a9a86);
-  background: transparent; /* Remove the pill background */
-  padding: 0;
-}
 /* Dynamic Auth Messages (Errors/Alerts) */
 .auth-message {
   color: var(--accent-pink, #ff9a9e);
@@ -734,3 +857,98 @@ button:active:not(:disabled) { transform: translateY(0); }
   }
 }
 
+/* Responsive adjustments for smaller screens */
+@media (max-width: 768px) {
+  .auth-card {
+    flex-direction: column;
+    width: 95%;
+  }
+}
+
+/* --- Grid Lines for Dragging --- */
+.workspace-canvas.grid-lines-active .workspace-canvas-grid-bg {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-image:
+    linear-gradient(var(--border-color) 1px, transparent 1px),
+    linear-gradient(to right, var(--border-color) 1px, transparent 1px);
+  background-size: 20px 20px;
+  opacity: 0.5;
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* --- Center Line Highlights for Grid --- */
+.workspace-canvas.grid-lines-active .workspace-canvas-grid-bg::before,
+.workspace-canvas.grid-lines-active .workspace-canvas-grid-bg::after {
+  content: '';
+  position: absolute;
+  background-color: var(--accent-pink);
+  opacity: 0.7;
+  z-index: 1;
+}
+
+/* Vertical center line */
+.workspace-canvas.grid-lines-active .workspace-canvas-grid-bg::before {
+  left: 50%;
+  top: 0;
+  width: 1px;
+  height: 100%;
+  transform: translateX(-50%);
+}
+
+/* Horizontal center line */
+.workspace-canvas.grid-lines-active .workspace-canvas-grid-bg::after {
+  top: 50%;
+  left: 0;
+  width: 100%;
+  height: 1px;
+  transform: translateY(-50%);
+}
+.template-actions {
+  position: absolute;
+  bottom: 30px;
+  right: 5px;
+  display: flex;
+  gap: 5px;
+  z-index: 10;
+}
+.template-action-btn {
+  background: rgba(0,0,0,0.6); color: white; border: none; border-radius: 4px;
+  width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;
+}
+
+
+/* --- Context Menu Styles --- */
+.context-menu {
+  position: fixed;
+  z-index: 10000;
+  background-color: var(--panel-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  box-shadow: var(--shadow-md);
+  padding: 5px 0;
+  min-width: 160px;
+  animation: authFadeIn 0.1s ease-out;
+}
+
+.context-menu ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.context-menu li {
+  padding: 8px 15px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: background-color 0.2s;
+}
+
+.context-menu li:hover {
+  background-color: var(--btn-primary);
+  color: white;
+}

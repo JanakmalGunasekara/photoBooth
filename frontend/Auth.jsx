@@ -42,7 +42,7 @@ export default function Auth() {
       <div className="auth-form-container">
         <h1 className="header">{isLogin ? 'Sign In' : 'Create Account'}</h1>
         <p className="description">
-          {isLogin ? 'Sign in to access your photo booth dashboard.' : 'Sign up to get started.'}
+          {isLogin ? 'Login to access your photo booth dashboard.' : 'Sign up to get started.'}
         </p>
         {message && <p className="auth-message">{message}</p>}
         <form onSubmit={handleAuth}>
