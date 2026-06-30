@@ -69,21 +69,21 @@ body {
 }
 
 .dashboard {
-  max-width: 1400px;
+  max-width: 1500px;
   margin: 0 auto;
-  padding: 2rem 4%;
+  padding: 1rem 4%;
   text-align: center;
 }
 
 .header h1 {
   font-size: 3em;
-  line-height: 1.2;
+  line-height: 1.0;
   background: var(--header-gradient);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   font-weight: 800;
   letter-spacing: -0.5px;
-  margin-bottom: 0.5rem;
+  margin-bottom: 0.4rem;
 }
 
 .header-logo {
@@ -164,7 +164,7 @@ body {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 0.5rem;
-    margin-top: 0.8rem;
+    margin-top: 0.6rem;
 }
 
 .preview-container, .controls-container, .setup-container {
@@ -223,7 +223,7 @@ body {
   border: 1px solid var(--border-color);
   min-width: 100%;
   width: 100%;
-  font-size: 0.5rem;
+  font-size: 0.85rem;
   transition: border-color 0.3s;
 }
 
@@ -865,49 +865,112 @@ input[type="file"]#template-upload, input[type="file"]#default-template-upload {
   }
 }
 
-/* --- Grid Lines for Dragging --- */
-.workspace-canvas.grid-lines-active .workspace-canvas-grid-bg {
+/* --- Grid & Snap Lines Overlay --- */
+.workspace-overlay, .workspace-overlay-svg {
   position: absolute;
   top: 0;
   left: 0;
   width: 100%;
   height: 100%;
-  background-image:
-    linear-gradient(var(--border-color) 1px, transparent 1px),
-    linear-gradient(to right, var(--border-color) 1px, transparent 1px);
-  background-size: 20px 20px;
-  opacity: 0.5;
-  z-index: 0;
   pointer-events: none;
+  z-index: 500; /* Ensure it's on top of the image but below text elements */
 }
 
-/* --- Center Line Highlights for Grid --- */
-.workspace-canvas.grid-lines-active .workspace-canvas-grid-bg::before,
-.workspace-canvas.grid-lines-active .workspace-canvas-grid-bg::after {
-  content: '';
-  position: absolute;
-  background-color: var(--accent-pink);
-  opacity: 0.7;
-  z-index: 1;
-}
-
-/* Vertical center line */
-.workspace-canvas.grid-lines-active .workspace-canvas-grid-bg::before {
-  left: 50%;
-  top: 0;
-  width: 1px;
-  height: 100%;
-  transform: translateX(-50%);
-}
-
-/* Horizontal center line */
-.workspace-canvas.grid-lines-active .workspace-canvas-grid-bg::after {
-  top: 50%;
-  left: 0;
+.workspace-overlay-svg {
   width: 100%;
-  height: 1px;
-  transform: translateY(-50%);
+  height: 100%;
+  overflow: visible;
 }
+
+.grid-lines-group line {
+  stroke: var(--border-color);
+  stroke-width: 1px;
+  opacity: 0.5;
+}
+
+.grid-lines-group .center-line {
+  stroke: var(--accent-pink);
+  stroke-width: 1px;
+  opacity: 0.7;
+}
+
+.snap-line {
+  stroke: var(--accent-pink);
+  stroke-width: 2px;
+  stroke-dasharray: 4 4;
+  vector-effect: non-scaling-stroke;
+}
+
+.distance-line line {
+  stroke: #00aaff; /* A bright blue for distance */
+  stroke-width: 1.5px;
+  vector-effect: non-scaling-stroke;
+}
+
+.distance-line .cap {
+  stroke: #00aaff;
+  stroke-width: 1.5px;
+  vector-effect: non-scaling-stroke;
+}
+
+/* --- Resizing Handles --- */
+.resize-handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  background-color: white;
+  border: 1px solid var(--btn-primary);
+  border-radius: 2px;
+  z-index: 1000;
+}
+.resize-handle.top-left { top: -5px; left: -5px; cursor: nwse-resize; }
+.resize-handle.top-right { top: -5px; right: -5px; cursor: nesw-resize; }
+.resize-handle.bottom-left { bottom: -5px; left: -5px; cursor: nesw-resize; }
+.resize-handle.bottom-right { bottom: -5px; right: -5px; cursor: nwse-resize; }
+.resize-handle.top { top: -5px; left: 50%; transform: translateX(-50%); cursor: ns-resize; }
+.resize-handle.bottom { bottom: -5px; left: 50%; transform: translateX(-50%); cursor: ns-resize; }
+.resize-handle.left { left: -5px; top: 50%; transform: translateY(-50%); cursor: ew-resize; }
+.resize-handle.right { right: -5px; top: 50%; transform: translateY(-50%); cursor: ew-resize; }
+
+/* --- Rotation Handle --- */
+.rotation-handle {
+  position: absolute;
+  top: -35px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 20px;
+  height: 30px;
+  cursor: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>') 10 10, auto;
+  z-index: 1001;
+}
+.rotation-handle::before { /* The line */
+  content: ''; position: absolute; bottom: 10px; left: 50%; width: 1px; height: 20px; background: var(--btn-primary); transform: translateX(-50%);
+}
+.rotation-handle::after { /* The circle */
+  content: ''; position: absolute; bottom: 0; left: 50%; width: 10px; height: 10px; background: white; border: 1px solid var(--btn-primary); border-radius: 50%; transform: translateX(-50%);
+}
+
+/* Text box specific styles */
+[id^="setup-text-"] {
+  /* The wrapper now handles position and size */
+}
+
+[id^="setup-text-"] > div:first-of-type {
+  /* The inner div is for text content styling */
+  display: flex;
+  align-items: center; /* Vertically center single line text */
+  justify-content: center; /* Works with text-align: center */
+}
+
+[id^="setup-text-"][style*="text-align: left"] > div:first-of-type {
+  justify-content: flex-start;
+}
+
+[id^="setup-text-"][style*="text-align: right"] > div:first-of-type {
+  justify-content: flex-end;
+}
+
+
 .template-actions {
   position: absolute;
   bottom: 30px;

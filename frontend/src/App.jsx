@@ -188,7 +188,7 @@ function App() {
   const [setupTemplateDims, setSetupTemplateDims] = useState({ width: 1000, height: 1000 });
   const [activeEditorTab, setActiveEditorTab] = useState('format'); // 'format', 'effects'
   const [expandedEffect, setExpandedEffect] = useState(null);
-  const [editorTool, setEditorTool] = useState('move'); // 'move' or 'draw'
+  const [editorTool, setEditorTool] = useState('move'); // 'move', 'draw', 'shapes'
   const [isTextDragging, setIsTextDragging] = useState(false);
   const [showGridLines, setShowGridLines] = useState(true);
   const [snapLines, setSnapLines] = useState([]);
@@ -199,6 +199,13 @@ function App() {
     y: 0,
     itemIndex: null,
   });
+  const [setupShapes, setSetupShapes] = useState([]);
+  const [selectedShapeIndex, setSelectedShapeIndex] = useState(null);
+  const shapeDragRef = useRef({ isDragging: false, index: -1, offsetX: 0, offsetY: 0 });
+  const transformRef = useRef({ isTransforming: false, type: null, itemType: null, index: -1, startX: 0, startY: 0, startW: 0, startH: 0, startXPos: 0, startYPos: 0, startRotation: 0, centerX: 0, centerY: 0 });
+
+
+
   // --- Theme Effect ---
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', isDarkMode ? 'dark' : 'light');
@@ -420,7 +427,14 @@ function App() {
 
   const handleReject = async () => {
     if (isProcessing) return;
-    await resetSession();
+
+    if (isPreviewMode) {
+        if (window.confirm("Are you sure you want to cancel and start a new session? All selected photos will be cleared.")) {
+            await resetSession();
+        }
+    } else {
+        await resetSession();
+    }
   };
 
   const handleDeletePhoto = async (photoName, e) => {
@@ -582,6 +596,7 @@ function App() {
   const handleAddText = () => {
     const newIdx = setupTexts.length;
     
+    // Default width for new text boxes to make them resizable
     const defaultEffects = {
         drop: { enabled: false, color: '#000000', distance: 5, angle: 45 },
         glow: { enabled: false, color: '#ff0000', intensity: 10 },
@@ -599,7 +614,9 @@ function App() {
         text: 'New Text',
         x: 150,
         y: 150,
+        width: 200, // Default width
         fontSize: 50,
+        rotation: 0,
         fillType: 'solid',
         color: isDarkMode ? '#FFFFFF' : '#000000',
         color2: '#ff0000',
@@ -766,37 +783,36 @@ function App() {
 
   const handleTextDragStart = (e, index) => {
       e.stopPropagation();
+      setSelectedShapeIndex(null);
       setSelectedTextIndex(index);
 
       // Don't start dragging if we are double-clicked to edit inline
       if (e.target.contentEditable === "true") return;
       
       const img = templateImageRef.current;
+      if (!img) return;
       const rect = img.getBoundingClientRect();
-      
-      const t = setupTexts[index];
-      const scaleX = setupTemplateDims.width / rect.width;
-      const scaleY = setupTemplateDims.height / rect.height;
-      
-      const mouseX = (e.clientX - rect.left) * scaleX;
-      const mouseY = (e.clientY - rect.top) * scaleY;
-      
-      const offsetX = t.x - mouseX;
-      const offsetY = t.y - mouseY;
 
-      textDragRef.current = { isDragging: true, index, offsetX, offsetY };
+      const startMouseX = e.clientX;
+      const startMouseY = e.clientY;
+      const { x: startX, y: startY } = setupTexts[index];
+
+      textDragRef.current = { isDragging: true, index };
       setIsTextDragging(true);
       
       const handleTextDragMove = (moveEvent) => {
           if (!textDragRef.current.isDragging) return;
           
-          const img = templateImageRef.current;
-          const rect = img.getBoundingClientRect();
+          const deltaX = moveEvent.clientX - startMouseX;
+          const deltaY = moveEvent.clientY - startMouseY;
+
           const scaleX = setupTemplateDims.width / rect.width;
           const scaleY = setupTemplateDims.height / rect.height;
           
-          let newX = ((moveEvent.clientX - rect.left) * scaleX) + textDragRef.current.offsetX;
-          let newY = ((moveEvent.clientY - rect.top) * scaleY) + textDragRef.current.offsetY;
+          let newX = startX + (deltaX * scaleX);
+          let newY = startY + (deltaY * scaleY);
+
+          const t = setupTexts[index]; // Get current text object for alignment checks
 
           // --- Snapping Logic ---
           const newSnapLines = [];
@@ -807,13 +823,13 @@ function App() {
               if (draggingElem) {
                   const draggingRect = draggingElem.getBoundingClientRect();
                   const draggingWidth = draggingRect.width * scaleX;
-                  const draggingHeight = draggingRect.height * scaleY;
+                  const draggingHeight = draggingRect.height * scaleY; // This might be inaccurate for multi-line text
 
                   const draggingBounds = {
-                      left: newX - (t.textAlign === 'center' ? draggingWidth / 2 : (t.textAlign === 'right' ? draggingWidth : 0)),
-                      top: newY - (draggingHeight / 2),
-                      right: newX + (t.textAlign === 'center' ? draggingWidth / 2 : (t.textAlign === 'left' ? draggingWidth : 0)),
-                      bottom: newY + (draggingHeight / 2),
+                      left: newX,
+                      top: newY,
+                      right: newX + draggingWidth,
+                      bottom: newY + draggingHeight,
                       centerX: newX,
                       centerY: newY
                   };
@@ -823,11 +839,11 @@ function App() {
                   const templateCenterY = setupTemplateDims.height / 2;
 
                   if (Math.abs(draggingBounds.centerX - templateCenterX) < SNAP_THRESHOLD) {
-                      newX = templateCenterX;
+                      newX = templateCenterX; // This needs adjustment based on text-align
                       newSnapLines.push({ type: 'vertical', position: templateCenterX });
                   }
                   if (Math.abs(draggingBounds.centerY - templateCenterY) < SNAP_THRESHOLD) {
-                      newY = templateCenterY;
+                      newY = templateCenterY; // This needs adjustment based on text-align
                       newSnapLines.push({ type: 'horizontal', position: templateCenterY });
                   }
 
@@ -841,11 +857,11 @@ function App() {
                       const otherWidth = otherRect.width * scaleX;
                       const otherHeight = otherRect.height * scaleY;
                       const otherBounds = {
-                          left: otherText.x - (otherText.textAlign === 'center' ? otherWidth / 2 : (otherText.textAlign === 'right' ? otherWidth : 0)),
-                          top: otherText.y - otherHeight / 2,
-                          right: otherText.x + (otherText.textAlign === 'center' ? otherWidth / 2 : (otherText.textAlign === 'left' ? otherWidth : 0)),
-                          bottom: otherText.y + otherHeight / 2,
-                          centerX: otherText.x,
+                          left: otherText.x,
+                          top: otherText.y,
+                          right: otherText.x + otherWidth,
+                          bottom: otherText.y + otherHeight,
+                          centerX: otherText.x, // This is also not the center anymore
                           centerY: otherText.y
                       };
 
@@ -950,13 +966,16 @@ function App() {
 
   const handleSelectTemplateForEditing = (template, initialTool = 'move') => {
     setSelectedTemplateForEditing(template);
-    setSelectionBoxes([]);
     setEditorZoom(0.5);
     setEditorTool(initialTool);
     setSelectedTextIndex(null);
+    setSelectedShapeIndex(null);
     const config = appConfig[template];
+    setSelectionBoxes(config?.areas ? [...config.areas] : []);
+    setSetupShapes(config?.shapes ? JSON.parse(JSON.stringify(config.shapes)) : []);
     setSetupTexts(config?.texts ? JSON.parse(JSON.stringify(config.texts)) : []);
   };
+
 
   const handleTemplateImageLoad = (e) => {
     const img = e.target;
@@ -990,6 +1009,7 @@ function App() {
       
       if (areas && areas.length > 0) {
         setSelectionBoxes([...areas]);
+        setSetupShapes(config.shapes ? JSON.parse(JSON.stringify(config.shapes)) : []);
       }
     }
   };
@@ -1006,6 +1026,9 @@ function App() {
       if (setupTexts && setupTexts.length > 0) {
           newConfig[selectedTemplateForEditing].texts = setupTexts;
       }
+      if (setupShapes && setupShapes.length > 0) {
+          newConfig[selectedTemplateForEditing].shapes = setupShapes;
+      }
 
       const res = await fetch(`${BACKEND_URL}/api/config`, {
         method: 'POST',
@@ -1021,6 +1044,8 @@ function App() {
 
       setSelectedTemplateForEditing(null); // Go back to the template list
       setSelectionBoxes([]); // Reset selection
+      setSetupShapes([]);
+      setSetupTexts([]);
       console.log(`Configuration saved for ${selectedTemplateForEditing}!`);
     } catch (error) {
       console.error("Failed to save configuration. Check the console.", error);
@@ -1263,13 +1288,6 @@ function App() {
   const isDrawingAllowed = (!isDefaultTemplate && editorTool === 'draw') || (isDefaultTemplate && isDeveloperMode && editorTool === 'draw');
   const isDrawingLocked = !isDrawingAllowed;
 
-  useEffect(() => {
-    if (selectedTemplateForEditing) {
-      const canDraw = !isDefaultTemplate || isDeveloperMode;
-      setEditorTool(canDraw ? 'draw' : 'move');
-    }
-  }, [selectedTemplateForEditing, isDefaultTemplate, isDeveloperMode]);
-
   // --- Context Menu Close Handler ---
   useEffect(() => {
     const handleClickOutside = (e) => {
@@ -1283,6 +1301,195 @@ function App() {
       window.removeEventListener('click', handleClickOutside);
     };
   }, [contextMenu.visible]);
+
+  const PREDEFINED_SHAPES = {
+    rect: { type: 'rect', width: 150, height: 150 },
+    ellipse: { type: 'ellipse', width: 150, height: 150 },
+    triangle: { type: 'polygon', points: '50,0 100,100 0,100', width: 100, height: 100 },
+    star: { type: 'polygon', points: '50,0 61,35 98,35 68,57 79,91 50,70 21,91 32,57 2,35 39,35', width: 100, height: 100 },
+    arrow: { type: 'polygon', points: '0,25 50,25 50,0 100,50 50,100 50,75 0,75', width: 100, height: 100 },
+    heart: { type: 'path', d: 'M50,90 C-20,40 20,-10 50,20 C80,-10 120,40 50,90 Z', width: 100, height: 100 },
+  };
+
+  const handleAddShape = (shapeKey) => {
+    const shapeProps = PREDEFINED_SHAPES[shapeKey];
+    const newShape = {
+      id: `shape_${Date.now()}`,
+      ...shapeProps,
+      x: 200,
+      y: 200,
+      rotation: 0,
+      fill: '#ff9a9e80',
+      stroke: '#ff9a9e',
+      strokeWidth: 4,
+    };
+    setSetupShapes(prev => [...prev, newShape]);
+    setSelectedShapeIndex(prev => prev === null ? 0 : prev + 1);
+    setSelectedTextIndex(null);
+  };
+  const handleShapeChange = (index, key, value) => {
+    setSetupShapes(prev => {
+      const updated = [...prev];
+      if (updated[index]) {
+        updated[index] = { ...updated[index], [key]: value };
+      }
+      return updated;
+    });
+  };
+
+  const handleRemoveShape = (index) => {
+    setSetupShapes(prev => prev.filter((_, i) => i !== index));
+    if (selectedShapeIndex === index) {
+      setSelectedShapeIndex(null);
+    }
+  };
+
+  const handleShapeDragStart = (e, index) => {
+      e.stopPropagation();
+      setSelectedShapeIndex(index);
+      setSelectedTextIndex(null);
+
+      const img = templateImageRef.current;
+      const rect = img.getBoundingClientRect();
+      const scaleX = setupTemplateDims.width / rect.width;
+      const scaleY = setupTemplateDims.height / rect.height;
+
+      const mouseX = (e.clientX - rect.left) * scaleX;
+      const mouseY = (e.clientY - rect.top) * scaleY;
+
+      const shape = setupShapes[index];
+      const offsetX = shape.x - mouseX;
+      const offsetY = shape.y - mouseY;
+
+      shapeDragRef.current = { isDragging: true, index, offsetX, offsetY };
+
+      const handleShapeDragMove = (moveEvent) => {
+          if (!shapeDragRef.current.isDragging) return;
+
+          const newMouseX = (moveEvent.clientX - rect.left) * scaleX;
+          const newMouseY = (moveEvent.clientY - rect.top) * scaleY;
+
+          let newX = newMouseX + shapeDragRef.current.offsetX;
+          let newY = newMouseY + shapeDragRef.current.offsetY;
+
+          // TODO: Add snapping for shapes similar to text
+
+          setSetupShapes(prev => {
+              const updated = [...prev];
+              if (updated[index]) {
+                  updated[index] = { ...updated[index], x: newX, y: newY };
+              }
+              return updated;
+          });
+      };
+
+      const handleShapeDragEnd = () => {
+          shapeDragRef.current.isDragging = false;
+          window.removeEventListener('mousemove', handleShapeDragMove);
+          window.removeEventListener('mouseup', handleShapeDragEnd);
+      };
+
+      window.addEventListener('mousemove', handleShapeDragMove);
+      window.addEventListener('mouseup', handleShapeDragEnd);
+  };
+
+  const handleTransformStart = (e, itemType, index, transformType, handle = null) => {
+      e.stopPropagation();
+      e.preventDefault();
+
+      const item = itemType === 'text' ? setupTexts[index] : setupShapes[index];
+      const itemElem = document.getElementById(`${itemType}-${item.id}`);
+      if (!itemElem) return;
+
+      const itemRect = itemElem.getBoundingClientRect();
+      const centerX = itemRect.left + itemRect.width / 2;
+      const centerY = itemRect.top + itemRect.height / 2;
+
+      transformRef.current = {
+          isTransforming: true, type: transformType, itemType, index, handle,
+          startX: e.clientX, startY: e.clientY,
+          startW: item.width, startH: item.height,
+          startXPos: item.x, startYPos: item.y,
+          startRotation: item.rotation || 0,
+          centerX, centerY
+      };
+
+      const handleTransformMove = (moveEvent) => {
+          if (!transformRef.current.isTransforming) return;
+
+          const { type, itemType, index, handle, startX, startY, startW, startH, startXPos, startYPos, startRotation, centerX, centerY } = transformRef.current;
+          const updateFunc = itemType === 'text' ? setSetupTexts : setSetupShapes;
+
+          if (type === 'rotate') {
+              const currentX = moveEvent.clientX;
+              const currentY = moveEvent.clientY;
+              const startAngle = Math.atan2(startY - centerY, startX - centerX) * (180 / Math.PI);
+              const currentAngle = Math.atan2(currentY - centerY, currentX - centerX) * (180 / Math.PI);
+              let newRotation = Math.round(startRotation + (currentAngle - startAngle));
+              
+              updateFunc(prev => {
+                  const updated = [...prev];
+                  if (updated[index]) {
+                      updated[index] = { ...updated[index], rotation: newRotation };
+                  }
+                  return updated;
+              });
+
+          } else if (type === 'resize') {
+              const img = templateImageRef.current;
+              if (!img) return;
+              const rect = img.getBoundingClientRect();
+              const scaleX = setupTemplateDims.width / rect.width;
+              const scaleY = setupTemplateDims.height / rect.height;
+
+              const dx = (moveEvent.clientX - startX) * scaleX;
+              const dy = (moveEvent.clientY - startY) * scaleY;
+
+              let newWidth = startW, newHeight = startH, newX = startXPos, newY = startYPos;
+
+              if (handle.includes('right')) newWidth = Math.max(20, startW + dx);
+              if (handle.includes('left')) {
+                  newWidth = Math.max(20, startW - dx);
+                  newX = startXPos + dx;
+              }
+              if (handle.includes('bottom')) newHeight = Math.max(20, startH + dy);
+              if (handle.includes('top')) {
+                  newHeight = Math.max(20, startH - dy);
+                  newY = startYPos + dy;
+              }
+
+              updateFunc(prev => {
+                  const updated = [...prev];
+                  if (updated[index]) {
+                      updated[index] = {
+                          ...updated[index],
+                          width: newWidth, height: newHeight,
+                          x: newX, y: newY
+                      };
+                  }
+                  return updated;
+              });
+          }
+      };
+
+      const handleTransformEnd = () => {
+          transformRef.current.isTransforming = false;
+          window.removeEventListener('mousemove', handleTransformMove);
+          window.removeEventListener('mouseup', handleTransformEnd);
+          window.removeEventListener('touchmove', handleTransformMove);
+          window.removeEventListener('touchend', handleTransformEnd);
+      };
+
+      window.addEventListener('mousemove', handleTransformMove);
+      window.addEventListener('mouseup', handleTransformEnd);
+      window.addEventListener('touchmove', handleTransformMove);
+      window.addEventListener('touchend', handleTransformEnd);
+  };
+
+
+
+
+
 
   if (isPasswordRecovery) {
     return <UpdatePassword />;
@@ -1443,7 +1650,7 @@ function App() {
             }
           }}
           style={{ cursor: 'pointer', userSelect: 'none', display: 'flex', alignItems: 'center', gap: '15px' }}
-          title="Click 5 times to toggle Developer Mode"
+          title={isDeveloperMode ? "Developer Mode is Active. Click 5 times to disable." : ""}
         >
           <img src={photoboothLogo} alt="Photo Booth Logo" className="header-logo" />
           {isDeveloperMode && <span style={{ fontSize: '0.8rem', color: 'red', verticalAlign: 'middle' }}>(DEV MODE)</span>}
@@ -1793,7 +2000,17 @@ function App() {
               <React.Fragment>
                 <div className="editing-sidebar">
                   <h2>Editing: {selectedTemplateForEditing}</h2>
-                  {isDefaultTemplate ? (
+                  <button 
+                    onClick={() => {
+                        if (JSON.stringify(appConfig[selectedTemplateForEditing]?.texts || []) !== JSON.stringify(setupTexts) || JSON.stringify(appConfig[selectedTemplateForEditing]?.shapes || []) !== JSON.stringify(setupShapes)) {
+                            if (window.confirm("You have unsaved changes. Are you sure you want to leave without saving?")) {
+                                setSelectedTemplateForEditing(null);
+                            }
+                        } else {
+                            setSelectedTemplateForEditing(null);
+                        }
+                    }} 
+                    className="back-arrow-btn" style={{position: 'absolute', top: '20px', right: '20px', width: '36px', height: '36px'}}>⬅</button>                  {isDefaultTemplate ? (
                       isDeveloperMode ? (
                           <p style={{ color: 'var(--accent-pink)', fontSize: '0.9rem' }}>🔓 Developer Mode: You can now edit areas.</p>
                       ) : (
@@ -1810,6 +2027,7 @@ function App() {
                   <div className="config-section" style={{ marginTop: '20px', padding: 0, boxShadow: 'none', background: 'transparent' }}>
                       <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border-color)', paddingBottom: '10px', marginBottom: '15px'}}>
                           <div style={{display:'flex', gap:'5px', background:'var(--input-bg)', padding:'4px', borderRadius:'8px'}}>
+                              <button onClick={()=>setActiveEditorTab('shapes')} className={activeEditorTab==='shapes'?'approve-btn':'secondary-btn'} style={{padding:'4px 10px', fontSize:'0.85rem'}}>Shapes</button>
                               <button onClick={()=>setActiveEditorTab('format')} className={activeEditorTab==='format'?'approve-btn':'secondary-btn'} style={{padding:'4px 10px', fontSize:'0.85rem'}}>Format</button>
                               <button onClick={()=>setActiveEditorTab('effects')} className={activeEditorTab==='effects'?'approve-btn':'secondary-btn'} style={{padding:'4px 10px', fontSize:'0.85rem'}}>Effects</button>
                           </div>
@@ -1818,7 +2036,57 @@ function App() {
                           </button>
                       </div>
                       
-                      {selectedTextIndex !== null && setupTexts[selectedTextIndex] ? (
+                      {activeEditorTab === 'shapes' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }} >
+                            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '10px' }}>
+                                <button onClick={() => handleAddShape('rect')} className="secondary-btn" style={{aspectRatio: '1', display: 'flex', alignItems: 'center', justifyContent: 'center'}}><svg width="24" height="24" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" fill="none" stroke="currentColor" strokeWidth="2"/></svg></button>
+                                <button onClick={() => handleAddShape('ellipse')} className="secondary-btn" style={{aspectRatio: '1', display: 'flex', alignItems: 'center', justifyContent: 'center'}}><svg width="24" height="24" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" strokeWidth="2"/></svg></button>
+                                <button onClick={() => handleAddShape('triangle')} className="secondary-btn" style={{aspectRatio: '1', display: 'flex', alignItems: 'center', justifyContent: 'center'}}><svg width="24" height="24" viewBox="0 0 24 24"><polygon points="12,2 22,22 2,22" fill="none" stroke="currentColor" strokeWidth="2"/></svg></button>
+                                <button onClick={() => handleAddShape('star')} className="secondary-btn" style={{aspectRatio: '1', display: 'flex', alignItems: 'center', justifyContent: 'center'}}><svg width="24" height="24" viewBox="0 0 24 24"><polygon points="12,2 15.09,8.26 22,9.27 17,14.14 18.18,21.02 12,17.77 5.82,21.02 7,14.14 2,9.27 8.91,8.26" fill="none" stroke="currentColor" strokeWidth="2"/></svg></button>
+                                <button onClick={() => handleAddShape('arrow')} className="secondary-btn" style={{aspectRatio: '1', display: 'flex', alignItems: 'center', justifyContent: 'center'}}><svg width="24" height="24" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg></button>
+                                <button onClick={() => handleAddShape('heart')} className="secondary-btn" style={{aspectRatio: '1', display: 'flex', alignItems: 'center', justifyContent: 'center'}}><svg width="24" height="24" viewBox="0 0 24 24"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" fill="none" stroke="currentColor" strokeWidth="2"/></svg></button>
+                            </div>
+                            {selectedShapeIndex !== null && setupShapes[selectedShapeIndex] && (() => {
+                                const shape = setupShapes[selectedShapeIndex];
+                                const i = selectedShapeIndex;
+                                return (
+                                    <div style={{ border: '1px solid var(--border-color)', padding: '15px', borderRadius: '8px', background: 'var(--item-bg)', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                            <strong style={{ fontSize: '0.9rem', color: 'var(--accent-pink)' }}>Selected Shape</strong>
+                                            <button onClick={() => handleRemoveShape(i)} title="Delete Shape" style={{ background: 'var(--btn-danger)', color: 'white', border: 'none', borderRadius: '4px', padding: '4px 8px', fontSize: '12px', cursor: 'pointer' }}>Delete</button>
+                                        </div>
+                                        <div className="control-group" style={{alignItems: 'center', margin: 0, flexDirection: 'row', gap: '10px'}}>
+                                            <label style={{fontSize: '0.8rem'}}>Fill Color</label>
+                                            <input type="color" value={shape.fill === 'transparent' ? '#ffffff' : shape.fill} onChange={(e) => handleShapeChange(i, 'fill', e.target.value)} style={{height: '30px', flex: 1}} disabled={shape.fill === 'transparent'} />
+                                            <button onClick={() => handleShapeChange(i, 'fill', shape.fill === 'transparent' ? '#ff9a9e80' : 'transparent')} className="secondary-btn" style={{padding: '4px 8px', fontSize: '0.75rem'}}>{shape.fill === 'transparent' ? 'Add Fill' : 'No Fill'}</button>
+                                        </div>
+                                        <div className="control-group" style={{alignItems: 'center', margin: 0, flexDirection: 'row', gap: '10px'}}><label style={{fontSize: '0.8rem'}}>Outline</label><input type="color" value={shape.stroke} onChange={(e) => handleShapeChange(i, 'stroke', e.target.value)} style={{height: '30px', flex: 1}} /></div>
+                                        <div className="control-group" style={{alignItems: 'flex-start', margin: 0}}>
+                                            <label style={{fontSize: '0.8rem'}}>Outline Width</label>
+                                            <div style={{ display: 'flex', gap: '10px', width: '100%', alignItems: 'center' }}>
+                                                <input type="range" min="0" max="50" step="1" value={shape.strokeWidth} onChange={(e) => handleShapeChange(i, 'strokeWidth', parseInt(e.target.value))} style={{flex: 1}} />
+                                                <span>{shape.strokeWidth}px</span>
+                                            </div>
+                                        </div>
+                                        <div className="control-group" style={{alignItems: 'flex-start', margin: 0}}>
+                                            <label style={{fontSize: '0.8rem'}}>Rotation</label>
+                                            <div style={{ display: 'flex', gap: '10px', width: '100%', alignItems: 'center' }}>
+                                                <input type="range" min="-180" max="180" step="1" value={shape.rotation || 0} onChange={(e) => handleShapeChange(i, 'rotation', parseInt(e.target.value))} style={{flex: 1}} />
+                                                <input type="number" value={shape.rotation || 0} onChange={(e) => handleShapeChange(i, 'rotation', parseInt(e.target.value))} style={{width: '60px', textAlign: 'center', background: 'var(--input-bg)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-main)'}} />
+                                                <span>°</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                );
+                            })()}
+                            {(selectedShapeIndex === null) && (
+                                <div style={{ textAlign: 'center', padding: '20px', background: 'var(--item-bg)', borderRadius: '8px', border: '1px dashed var(--border-color)' }}>
+                                    <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', margin: 0 }}>Add a new shape or select one on the template to edit it.</p>
+                                </div>
+                            )}
+                        </div>
+                      )}
+                      {activeEditorTab !== 'shapes' && selectedTextIndex !== null && setupTexts[selectedTextIndex] ? (
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
                               {(() => {
                                   const t = setupTexts[selectedTextIndex];
@@ -1898,6 +2166,14 @@ function App() {
                                                           <option value="star">★&emsp;Aaa</option>
                                                       </select>
                                                   </div>
+                                              </div>
+                                          </div>
+                                          <div className="control-group" style={{alignItems: 'flex-start', margin: 0, minWidth: 0}}>
+                                              <label style={{fontSize: '0.8rem'}}>Rotation</label>
+                                              <div style={{ display: 'flex', gap: '10px', width: '100%', alignItems: 'center' }}>
+                                                  <input type="range" min="-180" max="180" step="1" value={t.rotation || 0} onChange={(e) => handleTextChange(i, 'rotation', parseInt(e.target.value))} style={{flex: 1}} />
+                                                  <input type="number" value={t.rotation || 0} onChange={(e) => handleTextChange(i, 'rotation', parseInt(e.target.value))} style={{width: '60px', textAlign: 'center', background: 'var(--input-bg)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-main)'}} />
+                                                  <span>°</span>
                                               </div>
                                           </div>
 
@@ -2074,7 +2350,7 @@ function App() {
                                   );
                               })()}
                           </div>
-                      ) : (
+                      ) : activeEditorTab !== 'shapes' && (
                           <div style={{ textAlign: 'center', padding: '20px', background: 'var(--item-bg)', borderRadius: '8px', border: '1px dashed var(--border-color)' }}>
                               <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', margin: 0 }}>Select a text on the image to edit it, or click "+ Add Text".</p>
                           </div>
@@ -2084,7 +2360,6 @@ function App() {
                  
                 <div className="editing-workspace">
                   <div className="workspace-toolbar">
-                    <button onClick={() => setSelectedTemplateForEditing(null)} className="secondary-btn" style={{ padding: '4px 10px' }}>⬅ Back</button>
                     <div style={{flex: 1, display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '20px'}}>
                         <div style={{display: 'flex', alignItems: 'center', gap: '10px'}}>
                             <label style={{ fontSize: '0.9rem', fontWeight: 'bold' }}>Zoom:</label>
@@ -2106,9 +2381,29 @@ function App() {
                     </div>
                     <button onClick={handleSaveConfig} className="save-config-btn" style={{ padding: '4px 12px' }}>💾 Save</button>
                   </div>
-                    <div className={`workspace-canvas ${showGridLines || isTextDragging ? 'grid-lines-active' : ''}`} onMouseMove={editorTool === 'draw' ? handleMouseMove : undefined} onMouseUp={editorTool === 'draw' ? handleMouseUp : undefined} onMouseLeave={editorTool === 'draw' ? handleMouseUp : undefined}>
-                      <div style={{ position: 'relative', display: 'inline-block', width: `${setupTemplateDims.width * editorZoom}px`, height: `${setupTemplateDims.height * editorZoom}px`, textAlign: 'left', verticalAlign: 'top', overflow: 'visible' }} onMouseDown={(e) => { setSelectedTextIndex(null); if (isDrawingAllowed) handleMouseDown(e); }}>
-                        <div className="workspace-canvas-grid-bg"></div>
+                    <div className="workspace-canvas" onMouseMove={editorTool === 'draw' ? handleMouseMove : undefined} onMouseUp={editorTool === 'draw' ? handleMouseUp : undefined} onMouseLeave={editorTool === 'draw' ? handleMouseUp : undefined}>
+                      <div 
+                        style={{ 
+                            position: 'relative', 
+                            display: 'inline-block', 
+                            width: `${setupTemplateDims.width * editorZoom}px`, 
+                            height: `${setupTemplateDims.height * editorZoom}px`, 
+                            textAlign: 'left', 
+                            verticalAlign: 'top', 
+                            overflow: 'visible' 
+                        }} 
+                        onMouseDown={(e) => { 
+                            setSelectedTextIndex(null); 
+                            setSelectedShapeIndex(null);
+                            if (isDrawingAllowed) handleMouseDown(e); 
+                        }}
+                      >
+                        {/* Grid lines and snap lines are now rendered on top */}
+                        <div 
+                            className="workspace-overlay" 
+                            style={{ transform: `scale(${editorZoom})`, transformOrigin: 'top left' }}
+                        >
+                        </div>
                         <div style={{ position: 'relative', width: `${setupTemplateDims.width}px`, height: `${setupTemplateDims.height}px`, transform: `scale(${editorZoom})`, transformOrigin: 'top left' }}>
                           <img 
                             ref={templateImageRef} 
@@ -2137,47 +2432,97 @@ function App() {
                               height: `${(currentBox.height / setupTemplateDims.height) * 100}%`,
                             }} />
                           )}
+                          {/* Render Shapes */}
+                          {setupShapes.map((shape, idx) => {
+                              const isSelected = selectedShapeIndex === idx;
+                              const handles = ['top-left', 'top-right', 'bottom-left', 'bottom-right', 'top', 'bottom', 'left', 'right'];
+                              return (
+                                <div 
+                                    id={`shape-${shape.id}`}
+                                    key={shape.id}
+                                    style={{
+                                        position: 'absolute',
+                                        left: `${(shape.x / setupTemplateDims.width) * 100}%`,
+                                        top: `${(shape.y / setupTemplateDims.height) * 100}%`, // This is correct
+                                        width: `${(shape.width / setupTemplateDims.width) * 100}%`,
+                                        height: `${(shape.height / setupTemplateDims.height) * 100}%`,
+                                        transform: `translate(-50%, -50%) rotate(${shape.rotation || 0}deg)`,
+                                        cursor: 'move',
+                                        outline: isSelected ? '2px dashed var(--btn-primary)' : 'none',
+                                        boxSizing: 'border-box',
+                                        zIndex: 90 + idx
+                                    }}
+                                    onMouseDown={(e) => handleShapeDragStart(e, idx)}
+                                >
+                                {isSelected && (
+                                    <div className="rotation-handle" onMouseDown={(e) => handleTransformStart(e, 'shape', idx, 'rotate')} onTouchStart={(e) => handleTransformStart(e, 'shape', idx, 'rotate')}></div>
+                                )}
+                                {shape.type === 'polygon' || shape.type === 'path' ? (
+                                    <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={{ width: '100%', height: '100%', overflow: 'visible' }}>
+                                        {shape.type === 'polygon' && <polygon points={shape.points} fill={shape.fill} stroke={shape.stroke} strokeWidth={shape.strokeWidth} vectorEffect="non-scaling-stroke" />}
+                                        {shape.type === 'path' && <path d={shape.d} fill={shape.fill} stroke={shape.stroke} strokeWidth={shape.strokeWidth * 100 / Math.min(shape.width, shape.height)} vectorEffect="non-scaling-stroke" />}
+                                    </svg>) : (
+                                <div style={{
+                                    width: '100%', height: '100%',
+                                    background: shape.type === 'rect' ? shape.fill : 'transparent',
+                                    borderRadius: shape.type === 'ellipse' ? '50%' : '0px',
+                                    border: `${shape.strokeWidth}px solid ${shape.stroke}`
+                                }} />
+                                )}{isSelected && handles.map(handle => <div key={handle} className={`resize-handle ${handle}`} onMouseDown={(e) => handleTransformStart(e, 'shape', idx, 'resize', handle)} />)}
+                                </div>
+                              );
+                          })}
                           {/* Draggable Text Previews */}
                           {setupTexts.map((text, idx) => {
                               const isSelected = selectedTextIndex === idx;
                               const styles = getTextStyleOptions(text, 1);
                               return (
-                                <div
-                                  key={`setup-text-${idx}`}
-                                  id={`setup-text-${idx}`}
-                                  style={{
-                                      position: 'absolute',
-                                      left: `${(text.x / setupTemplateDims.width) * 100}%`,
-                                      top: `${(text.y / setupTemplateDims.height) * 100}%`,
-                                      transform: text.textAlign === 'left' ? 'translate(0%, -50%)' : text.textAlign === 'right' ? 'translate(-100%, -50%)' : 'translate(-50%, -50%)',
-                                      textAlign: text.textAlign || 'center',
-                                      fontSize: `${text.fontSize || 50}px`,
-                                      letterSpacing: `${text.letterSpacing || 0}px`,
-                                      lineHeight: text.lineHeight || 1.2,
-                                      color: styles.color,
-                                      fontWeight: styles.fontWeight,
-                                      fontStyle: styles.fontStyle,
-                                      textDecoration: styles.textDecoration,
-                                      textShadow: styles.textShadow,
-                                      WebkitTextStroke: styles.WebkitTextStroke,
-                                      WebkitTextFillColor: styles.WebkitTextFillColor,
-                                      backgroundImage: styles.backgroundImage,
-                                      backgroundColor: styles.backgroundColor,
-                                      WebkitBackgroundClip: styles.WebkitBackgroundClip,
-                                      backgroundClip: styles.backgroundClip,
-                                      padding: styles.padding,
-                                      opacity: styles.opacity,
-                                      borderRadius: styles.borderRadius,
-                                      fontFamily: text.fontFamily || 'Arial',
-                                      whiteSpace: 'pre-wrap',
-                                      cursor: editorTool === 'draw' ? 'default' : 'move',
-                                      outline: isSelected ? '2px dashed var(--btn-primary)' : '2px dashed transparent',
-                                      userSelect: 'none', 
-                                      zIndex: 100 + idx
-                                  }}
-                                  onMouseDown={(e) => handleTextDragStart(e, idx)}
-                                  onContextMenu={(e) => handleTextContextMenu(e, idx)}
-                                  onDoubleClick={(e) => {
+                                <div key={`setup-text-wrapper-${idx}`}
+                                    id={`text-${text.id}`} // Ensure text object has a unique id
+                                    style={{
+                                        position: 'absolute',
+                                        left: `${(text.x / setupTemplateDims.width) * 100}%`,
+                                        top: `${(text.y / setupTemplateDims.height) * 100}%`,
+                                        width: text.width ? `${(text.width / setupTemplateDims.width) * 100}%` : 'auto',
+                                        height: text.height ? `${(text.height / setupTemplateDims.height) * 100}%` : 'auto',
+                                        transform: `translate(-50%, -50%) rotate(${text.rotation || 0}deg)`,
+                                        cursor: 'move',
+                                        outline: isSelected ? '2px dashed var(--btn-primary)' : 'none',
+                                        zIndex: 100 + idx,
+                                        userSelect: 'none',
+                                    }}
+                                    onMouseDown={(e) => handleTextDragStart(e, idx)}
+                                    onContextMenu={(e) => handleTextContextMenu(e, idx)}
+                                >
+                                    {isSelected && (
+                                        <div className="rotation-handle" onMouseDown={(e) => handleTransformStart(e, 'text', idx, 'rotate')} onTouchStart={(e) => handleTransformStart(e, 'text', idx, 'rotate')}></div>
+                                    )}
+                                    <div
+                                        style={{
+                                            width: '100%', height: '100%',
+                                            textAlign: text.textAlign || 'center',
+                                            fontSize: `${text.fontSize || 50}px`,
+                                            letterSpacing: `${text.letterSpacing || 0}px`,
+                                            lineHeight: text.lineHeight || 1.2,
+                                            color: styles.color,
+                                            fontWeight: styles.fontWeight,
+                                            fontStyle: styles.fontStyle,
+                                            textDecoration: styles.textDecoration,
+                                            textShadow: styles.textShadow,
+                                            WebkitTextStroke: styles.WebkitTextStroke,
+                                            WebkitTextFillColor: styles.WebkitTextFillColor,
+                                            backgroundImage: styles.backgroundImage,
+                                            backgroundColor: styles.backgroundColor,
+                                            WebkitBackgroundClip: styles.WebkitBackgroundClip,
+                                            backgroundClip: styles.backgroundClip,
+                                            padding: styles.padding,
+                                            opacity: styles.opacity,
+                                            borderRadius: styles.borderRadius,
+                                            fontFamily: text.fontFamily || 'Arial',
+                                            whiteSpace: 'pre-wrap',
+                                            wordWrap: 'break-word',
+                                        }}
+                                        onDoubleClick={(e) => {
                                       e.stopPropagation();
                                       e.target.contentEditable = true;
                                       e.target.focus();
@@ -2189,13 +2534,49 @@ function App() {
                                       e.target.style.cursor = 'move';
                                       handleTextChange(idx, 'text', e.target.innerText || 'Text');
                                   }}
-                                  suppressContentEditableWarning={true}
-                                >
-                                    {getDisplayText(text)}
+                                        suppressContentEditableWarning={true}
+                                    >
+                                        {getDisplayText(text)}
+                                    </div>
+                                    {isSelected && ['top-left', 'top-right', 'bottom-left', 'bottom-right', 'right', 'left'].map(handle => <div key={handle} className={`resize-handle ${handle}`} onMouseDown={(e) => handleTransformStart(e, 'text', idx, 'resize', handle)} />)}
                                 </div>
                               );
                           })}
                         </div>
+                        {/* Overlay for Grid and Snap Lines */}
+                        <svg className="workspace-overlay-svg" style={{ transform: `scale(${editorZoom})`, transformOrigin: 'top left' }}>
+                            {/* Grid Lines */}
+                            {showGridLines && isTextDragging && (
+                                <g className="grid-lines-group">
+                                    {/* Vertical Lines */}
+                                    {Array.from({ length: 19 }).map((_, i) => <line key={`v-${i}`} x1={`${(i + 1) * 5}%`} y1="0" x2={`${(i + 1) * 5}%`} y2="100%" />)}
+                                    {/* Horizontal Lines */}
+                                    {Array.from({ length: 19 }).map((_, i) => <line key={`h-${i}`} x1="0" y1={`${(i + 1) * 5}%`} x2="100%" y2={`${(i + 1) * 5}%`} />)}
+                                    {/* Center Lines */}
+                                    <line className="center-line" x1="50%" y1="0" x2="50%" y2="100%" />
+                                    <line className="center-line" x1="0" y1="50%" x2="100%" y2="50%" />
+                                </g>
+                            )}
+                            {/* Snap Lines */}
+                            {snapLines.map((line, i) => (
+                                <line
+                                    key={`snap-${i}`}
+                                    className="snap-line"
+                                    x1={line.type === 'vertical' ? line.position : 0}
+                                    y1={line.type === 'horizontal' ? line.position : 0}
+                                    x2={line.type === 'vertical' ? line.position : setupTemplateDims.width}
+                                    y2={line.type === 'horizontal' ? line.position : setupTemplateDims.height}
+                                />
+                            ))}
+                            {/* Distance Lines */}
+                            {distanceLines.map((line, i) => (
+                                <g key={`dist-${i}`} className="distance-line">
+                                    <line x1={line.type === 'vertical' ? line.x : line.start} y1={line.type === 'vertical' ? line.start : line.y} x2={line.type === 'vertical' ? line.x : line.end} y2={line.type === 'vertical' ? line.end : line.y} />
+                                    <line className="cap" x1={line.type === 'vertical' ? line.x - 5 : line.start} y1={line.type === 'vertical' ? line.start : line.y - 5} x2={line.type === 'vertical' ? line.x + 5 : line.start} y2={line.type === 'vertical' ? line.start : line.y + 5} />
+                                    <line className="cap" x1={line.type === 'vertical' ? line.x - 5 : line.end} y1={line.type === 'vertical' ? line.end : line.y - 5} x2={line.type === 'vertical' ? line.x + 5 : line.end} y2={line.type === 'vertical' ? line.end : line.y + 5} />
+                                </g>
+                            ))}
+                        </svg>
                       </div>
                     </div>
                 </div>
